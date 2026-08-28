@@ -1,0 +1,193 @@
+/* Sitewide readability floor for Nanas.
+   The app had many 8-11px rules from earlier dense mockups; keep metadata compact
+   without letting real copy become fine print. */
+
+:is(
+    .nanas-home,
+    .mp-shell,
+    .auth-shell,
+    .public-profile-shell,
+    .portal-shell,
+    .buyer-shell,
+    .care-full-profile,
+    .care-result-card,
+    .care-preview-panel,
+    .aj-profile-page,
+    .aj-job-page,
+    .seller-profile-studio,
+    .seller-profile-live-preview
+  )
+  :is(p, li, label, input, select, textarea) {
+  font-size: max(16px, 1em) !important;
+  line-height: 1.6 !important;
+}
+
+:is(
+    .nanas-home,
+    .mp-shell,
+    .auth-shell,
+    .public-profile-shell,
+    .portal-shell,
+    .buyer-shell,
+    .care-full-profile,
+    .care-result-card,
+    .care-preview-panel,
+    .aj-profile-page,
+    .aj-job-page,
+    .seller-profile-studio,
+    .seller-profile-live-preview
+  )
+  :is(a, button) {
+  font-size: max(15px, 1em) !important;
+  line-height: 1.25 !important;
+}
+
+:is(
+    .nanas-home,
+    .mp-shell,
+    .auth-shell,
+    .public-profile-shell,
+    .portal-shell,
+    .buyer-shell,
+    .care-full-profile,
+    .care-result-card,
+    .care-preview-panel,
+    .aj-profile-page,
+    .aj-job-page,
+    .seller-profile-studio,
+    .seller-profile-live-preview
+  )
+  :is(small, time, code) {
+  font-size: max(14px, 1em) !important;
+  line-height: 1.45 !important;
+}
+
+:is(
+    .nanas-home,
+    .mp-shell,
+    .auth-shell,
+    .public-profile-shell,
+    .portal-shell,
+    .buyer-shell,
+    .care-full-profile,
+    .care-result-card,
+    .care-preview-panel,
+    .aj-profile-page,
+    .aj-job-page,
+    .seller-profile-studio,
+    .seller-profile-live-preview
+  )
+  :is(span, b, em) {
+  font-size: max(14px, 1em) !important;
+  line-height: 1.35 !important;
+}
+
+:is(
+    .nanas-home,
+    .mp-shell,
+    .auth-shell,
+    .public-profile-shell,
+    .portal-shell,
+    .buyer-shell,
+    .care-full-profile,
+    .care-result-card,
+    .care-preview-panel,
+    .aj-profile-page,
+    .aj-job-page,
+    .seller-profile-studio,
+    .seller-profile-live-preview
+  )
+  :is(
+    .status,
+    .mp-kicker,
+    .mp-pills span,
+    .mp-request-card header span,
+    .care-result-badges i,
+    .care-result-traits i,
+    .care-preview-capability-list > span,
+    .care-preview-detail-list span,
+    .care-preview-safety-list small,
+    .care-profile-capability-list span,
+    .care-profile-personal-details > div span,
+    .care-profile-safety-list small,
+    .seller-preview-capabilities span,
+    .seller-preview-service-tabs button,
+    .portal-sidebar nav a,
+    .role-label,
+    .connection-pill,
+    .buyer-eyebrow,
+    .buyer-trust-line,
+    .workspace-welcome > div > span,
+    .table-head,
+    .notification-list em
+  ) {
+  font-size: max(14px, 1em) !important;
+  line-height: 1.35 !important;
+}
+
+.portal-shell
+  :is(.portal-page-head p, .portal-panel > header p, .list-main span),
+.buyer-shell
+  :is(.portal-page-head p, .portal-panel > header p, .list-main span),
+.care-preview-panel :is(.care-preview-section > p, .care-preview-about),
+.care-full-profile :is(.care-profile-section > p, .care-profile-bio),
+.aj-profile-page :is(.aj-profile-sections > section > p, .aj-package-body li),
+.aj-job-page :is(.aj-job-description, .aj-request-needs span),
+.auth-shell :is(.auth-card > p, .auth-story li span),
+.public-profile-shell :is(.care-profile-section > p, .care-profile-bio) {
+  font-size: max(16px, 1em) !important;
+  line-height: 1.65 !important;
+}
+
+.portal-shell :is(.primary-action, .secondary-action, .workspace-header-cta),
+.buyer-shell :is(.primary-action, .secondary-action, .workspace-header-cta),
+.care-preview-panel
+  :is(.care-preview-sticky-action button, .care-preview-full-link),
+.care-full-profile
+  :is(.care-profile-primary-contact, .care-profile-contact-card > a),
+.aj-profile-page :is(.aj-solid-cta, .aj-profile-sections button),
+.aj-job-page :is(.aj-budget-card > a, .aj-budget-card > button),
+.auth-shell .auth-card form > button {
+  min-height: 46px;
+  font-size: max(15px, 1em) !important;
+}
+
+@media (max-width: 760px) {
+  :is(
+      .nanas-home,
+      .mp-shell,
+      .auth-shell,
+      .public-profile-shell,
+      .portal-shell,
+      .buyer-shell,
+      .care-full-profile,
+      .care-result-card,
+      .care-preview-panel,
+      .aj-profile-page,
+      .aj-job-page,
+      .seller-profile-studio,
+      .seller-profile-live-preview
+    )
+    :is(p, li, label, input, select, textarea) {
+    font-size: max(17px, 1em) !important;
+  }
+
+  :is(
+      .nanas-home,
+      .mp-shell,
+      .auth-shell,
+      .public-profile-shell,
+      .portal-shell,
+      .buyer-shell,
+      .care-full-profile,
+      .care-result-card,
+      .care-preview-panel,
+      .aj-profile-page,
+      .aj-job-page,
+      .seller-profile-studio,
+      .seller-profile-live-preview
+    )
+    :is(a, button) {
+    font-size: max(16px, 1em) !important;
+  }
+}

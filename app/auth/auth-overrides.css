@@ -1,0 +1,40 @@
+.contact-tabs {
+  display: flex;
+  gap: 7px;
+  margin: 14px 0;
+}
+
+.contact-tabs button {
+  flex: 1;
+  border: 1px solid #dce9e7;
+  background: #fff;
+  border-radius: 9px;
+  padding: 8px;
+  color: #687d7c;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.contact-tabs button.active {
+  background: #edf6f4;
+  border-color: #78b0b1;
+  color: #1e4b4c;
+}
+
+.auth-links {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 11px;
+}
+
+.auth-links button {
+  border: 0;
+  background: transparent;
+  color: #2b6565;
+  font-size: 9px;
+  font-weight: 800;
+  padding: 4px 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

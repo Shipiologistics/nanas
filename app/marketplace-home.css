@@ -1,0 +1,763 @@
+html,
+body,
+main {
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+.nanas-home {
+  background: #fff;
+}
+
+/* Homepage header */
+.nanas-home > .mp-header {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 90;
+  height: 80px;
+  padding: 0 max(24px, calc((100% - 1280px) / 2));
+  border-bottom-color: rgba(255, 255, 255, 0.18);
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.nanas-home > .mp-header .mp-wordmark,
+.nanas-home > .mp-header nav > a,
+.nanas-home > .mp-header .mp-actions > a {
+  color: #fff;
+}
+
+.nanas-home > .mp-header .mp-wordmark {
+  display: inline-flex;
+  height: 40px;
+  align-items: center;
+  font-size: 40px !important;
+  line-height: 1;
+}
+
+.nanas-home > .mp-header nav {
+  gap: 4px;
+}
+
+.nanas-home > .mp-header .mp-actions {
+  gap: 12px;
+}
+
+.nanas-home > .mp-header .mp-actions > .mp-post {
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  background: #fff;
+  color: var(--mp-deep);
+}
+
+.nanas-home > .mp-header .mp-actions > .mp-post:hover,
+.nanas-home > .mp-header .mp-actions > .mp-post:focus-visible {
+  border-color: #fff;
+  background: var(--mp-deep);
+  color: #fff;
+}
+
+/* One authoritative homepage hero */
+.nanas-home .home-hero-shell {
+  position: relative;
+}
+
+.nanas-home .hero {
+  position: relative;
+  display: flex;
+  min-height: 700px;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  padding: 0;
+  background: #113f40 url("/nanas/hero-home-wide.png") center / cover no-repeat;
+  color: #fff;
+}
+
+.nanas-home .hero::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(17, 24, 39, 0.7),
+    rgba(17, 24, 39, 0.5),
+    rgba(17, 24, 39, 0.8)
+  );
+  content: "";
+}
+
+.nanas-home .hero::after {
+  display: none;
+}
+
+.nanas-home .hero-copy {
+  position: relative;
+  z-index: 1;
+  width: min(896px, 100%);
+  margin: 0 auto;
+  padding: 88px 24px 56px;
+  text-align: center;
+}
+
+.nanas-home .hero .eyebrow {
+  display: inline-flex;
+  width: auto;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0 0 22px;
+  padding: 6px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  backdrop-filter: blur(12px);
+}
+
+.nanas-home .hero .eyebrow span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #79c7c2;
+  box-shadow: none;
+}
+
+.nanas-home .hero h1 {
+  max-width: 800px;
+  margin: 0 auto 20px;
+  color: #fff;
+  font-family: var(--font-geist-sans), Arial, sans-serif;
+  font-size: 60px;
+  font-weight: 800;
+  line-height: 0.96;
+  letter-spacing: -0.04em;
+}
+
+.nanas-home .hero h1 em {
+  display: inline;
+  color: #aee0dc;
+  font: inherit;
+}
+
+.nanas-home .hero-mode-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(620px, 100%);
+  margin: 0 auto;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(12px);
+}
+
+.nanas-home .hero-mode-toggle legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.nanas-home .hero-mode-toggle button,
+.nanas-home .hero-mode-toggle a {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 16px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.nanas-home .hero-mode-toggle button {
+  background: #fff;
+  color: #030712;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.nanas-home .hero-mode-toggle span {
+  width: 14px;
+  height: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 50%;
+}
+
+.nanas-home .hero-mode-toggle button span {
+  border-color: #0f9494;
+  background: #0f9494;
+  box-shadow: 0 0 0 2px #d6efed;
+}
+
+.nanas-home .home-search-overlay {
+  position: relative;
+  z-index: 30;
+  width: min(840px, 100%);
+  margin: 14px auto 0;
+  padding: 0;
+  text-align: center;
+}
+
+.nanas-home .care-search {
+  display: grid;
+  grid-template-columns: minmax(300px, 1.45fr) minmax(240px, 1.15fr) auto;
+  width: 100%;
+  min-height: 60px;
+  margin: 0;
+  padding: 0;
+  overflow: visible;
+  border: 1px solid #f3f4f6;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+}
+
+.nanas-home .care-search label {
+  position: relative;
+  min-width: 0;
+  min-height: 60px;
+  padding: 8px 14px;
+  text-align: left;
+}
+
+.nanas-home .care-search label:first-child {
+  padding-left: 20px;
+}
+
+.nanas-home .care-search label + label {
+  border-left: 1px solid #dce6e4;
+}
+
+.nanas-home .care-search label > span {
+  display: block;
+  color: #647876;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.nanas-home .care-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #153e3f;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.nanas-home .care-search input::placeholder {
+  color: #718381;
+  opacity: 1;
+}
+
+.nanas-home .care-search-submit {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 8px;
+  padding: 14px 26px;
+  border: 0;
+  border-radius: 12px;
+  background: #0f6162;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.nanas-home .care-search-submit-label {
+  margin: 0 !important;
+}
+
+.nanas-home .care-search-submit svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+
+.nanas-care-search-suggestions {
+  position: fixed;
+  z-index: 1000;
+  max-height: 308px;
+  padding: 8px;
+  overflow-y: auto;
+  border: 1px solid #dbe7e4;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 18px 40px rgba(15, 55, 56, 0.2);
+}
+
+.nanas-care-search-suggestions button {
+  display: flex;
+  width: 100%;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #fff;
+  color: #153e3f;
+  text-align: left;
+}
+
+.nanas-care-search-suggestions button:hover,
+.nanas-care-search-suggestions button[aria-selected="true"] {
+  background: #edf7f5;
+}
+
+.nanas-care-search-suggestions strong {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.nanas-care-search-suggestions small {
+  color: #667b78;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.nanas-home .hero-popular-searches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.nanas-home .hero-popular-searches span,
+.nanas-home .hero-popular-searches a {
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 12px;
+}
+
+.nanas-home .hero-popular-searches > span {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.nanas-home .hero-popular-searches a {
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  text-decoration: none;
+}
+
+.nanas-home .hero-custom-request {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 12px;
+  background: rgba(17, 24, 39, 0.65);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  backdrop-filter: blur(12px);
+}
+
+/* Compact category launcher */
+.nanas-home .popular-category-strip {
+  position: relative;
+  z-index: 0;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  width: min(1024px, calc(100% - 48px));
+  margin: -56px auto 0;
+  padding: 32px;
+  gap: 12px;
+  border: 1px solid #f3f4f6;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.05),
+    0 8px 10px -6px rgba(0, 0, 0, 0.05);
+}
+
+.nanas-home .popular-category-strip > a,
+.nanas-home .popular-category-strip > a:nth-of-type(n) {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 12px;
+  border: 0;
+  border-radius: 12px;
+  color: inherit;
+  text-align: center;
+  text-decoration: none;
+}
+
+.nanas-home .popular-category-strip > a:hover {
+  background: #f9fafb;
+}
+
+.nanas-home .popular-category-icon {
+  display: grid;
+  width: 56px;
+  height: 56px;
+  flex: 0 0 56px;
+  place-items: center;
+  border-radius: 16px;
+  background: #e2f3f0;
+  color: var(--mp-teal);
+}
+
+.nanas-home .popular-category-strip > a:nth-of-type(2n) .popular-category-icon {
+  background: #e6eef7;
+  color: #46708a;
+}
+
+.nanas-home .popular-category-strip > a:nth-of-type(3n) .popular-category-icon {
+  background: #f7e9de;
+  color: #9b673b;
+}
+
+.nanas-home .popular-category-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.nanas-home .popular-category-strip > a b {
+  color: #4b5563;
+  font-size: 12px !important;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.nanas-home .popular-category-strip > a small {
+  display: none;
+}
+
+/* Homepage-only section refinements */
+.nanas-home .section {
+  max-width: 100%;
+}
+
+.nanas-home .care-section {
+  padding-top: 140px;
+}
+
+.nanas-home .service-card,
+.nanas-home .profile-card,
+.nanas-home .step-card {
+  box-shadow: 0 10px 30px rgba(25, 68, 69, 0.035);
+}
+
+.nanas-home .service-card:hover,
+.nanas-home .profile-card:hover {
+  box-shadow: 0 18px 40px rgba(25, 68, 69, 0.09);
+}
+
+.nanas-home .service-card {
+  color: inherit;
+  text-decoration: none;
+}
+
+.nanas-home .profile-footer a,
+.nanas-home .seller-cta-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.nanas-home .profile-footer a {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: #1e4b4c;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.nanas-home .how-section {
+  background: #f7faf9;
+}
+
+.nanas-home .steps-grid {
+  gap: 14px;
+}
+
+.nanas-home .step-card {
+  padding: 26px !important;
+  border: 1px solid #dfe8e5 !important;
+  border-radius: 20px !important;
+  background: #fff;
+}
+
+.nanas-home .seller-cta {
+  background: linear-gradient(140deg, #d9eeec, #eef7f5);
+}
+
+@media (max-width: 1023px) {
+  .nanas-home .hero h1 {
+    font-size: 52px;
+  }
+}
+
+@media (max-width: 980px) {
+  .nanas-home > .mp-header nav.open {
+    background: #fff;
+  }
+
+  .nanas-home > .mp-header nav.open > a {
+    color: var(--mp-deep);
+    font-size: 15px !important;
+  }
+
+  .nanas-home > .mp-header nav.open > .mp-mobile-post {
+    color: #fff;
+  }
+
+  .nanas-home > .mp-header .mp-actions button {
+    border-color: rgba(255, 255, 255, 0.62);
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+  }
+}
+
+@media (max-width: 767px) {
+  .nanas-home .hero h1 {
+    font-size: 44px;
+  }
+}
+
+@media (max-width: 639px) {
+  .nanas-home > .mp-header {
+    height: 56px;
+    padding: 0 14px;
+  }
+
+  .nanas-home > .mp-header .mp-wordmark {
+    height: 32px;
+    font-size: 29px !important;
+  }
+
+  .nanas-home > .mp-header .mp-actions > a {
+    display: none;
+  }
+
+  .nanas-home > .mp-header .mp-actions {
+    margin-left: auto;
+  }
+
+  .nanas-home .hero {
+    height: min(560px, 133.333vw);
+    min-height: 0;
+    background-image: url("/nanas/hero-home-mobile.webp");
+    background-position: center;
+  }
+
+  .nanas-home .hero-copy {
+    padding: 62px 14px 26px;
+    transform: translateY(clamp(20px, 7vw, 28px));
+  }
+
+  .nanas-home .hero .eyebrow {
+    margin-bottom: 8px;
+    padding: 4px 9px;
+    font-size: 10px !important;
+    line-height: 1.2 !important;
+  }
+
+  .nanas-home .hero h1 {
+    margin-bottom: 8px;
+    font-size: 26px;
+    line-height: 0.94;
+  }
+
+  .nanas-home .hero-mode-toggle {
+    width: min(100%, 300px);
+    padding: 3px;
+    gap: 3px;
+  }
+
+  .nanas-home .hero-mode-toggle button,
+  .nanas-home .hero-mode-toggle a {
+    min-height: 32px;
+    padding: 4px;
+    font-size: 12px !important;
+    line-height: 1 !important;
+  }
+
+  .nanas-home .hero-mode-toggle span {
+    width: 11px;
+    height: 11px;
+  }
+
+  .nanas-home .home-search-overlay {
+    width: min(100%, 330px);
+    margin-top: 6px;
+  }
+
+  .nanas-home .care-search {
+    display: flex;
+    min-height: 48px;
+    align-items: center;
+    gap: 5px;
+    padding: 5px;
+    border-radius: 12px;
+  }
+
+  .nanas-home .care-search label {
+    display: flex;
+    height: 38px;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+  }
+
+  .nanas-home .care-search label:first-child {
+    padding-left: 8px;
+  }
+
+  .nanas-home .care-search label + label,
+  .nanas-home .care-search label > span {
+    display: none;
+  }
+
+  .nanas-home .care-search label + label {
+    border-left: 0;
+  }
+
+  .nanas-home .care-search input {
+    font-size: 13px !important;
+    line-height: 1.1 !important;
+    text-align: center;
+  }
+
+  .nanas-home .care-search-submit {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px !important;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .nanas-home .care-search-submit-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .nanas-home .care-search-submit svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .nanas-home .hero-popular-searches {
+    flex-wrap: nowrap;
+    gap: 4px;
+    margin-top: 6px;
+  }
+
+  .nanas-home .hero-popular-searches > span {
+    display: none;
+  }
+
+  .nanas-home .hero-custom-request {
+    min-height: 32px;
+    margin-top: 6px;
+    padding: 0 10px;
+    font-size: 12px !important;
+    line-height: 1 !important;
+  }
+
+  .nanas-home .hero-popular-searches a {
+    display: inline-flex;
+    min-height: 26px;
+    flex: 1 1 0;
+    align-items: center;
+    justify-content: center;
+    padding: 3px 7px;
+    font-size: 12px !important;
+    line-height: 1 !important;
+    white-space: nowrap;
+  }
+
+  .nanas-home .hero-popular-searches a:nth-of-type(4) {
+    display: none;
+  }
+
+  .nanas-home .popular-category-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: calc(100% - 32px);
+    margin-top: -20px;
+    padding: 16px;
+    gap: 8px;
+    border-radius: 16px;
+  }
+
+  .nanas-home .popular-category-strip > a,
+  .nanas-home .popular-category-strip > a:nth-of-type(n) {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .nanas-home .popular-category-icon {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+    border-radius: 12px;
+  }
+
+  .nanas-home .popular-category-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .nanas-home .popular-category-strip > a b {
+    font-size: 10px !important;
+  }
+
+  .nanas-home .care-section {
+    padding-top: 90px;
+  }
+
+  .nanas-home .service-card {
+    grid-template-columns: auto 1fr;
+  }
+
+  .nanas-home .service-card .round-arrow {
+    display: none;
+  }
+}

@@ -1,0 +1,10 @@
+.public-profile-shell {
+  overflow-x: clip;
+}
+
+@media (max-width: 700px) {
+  .public-profile-content .aj-profile-media {
+    margin-left: -12px;
+    margin-right: -12px;
+  }
+}

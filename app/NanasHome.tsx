@@ -1,44 +1,139 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import Link from "next/link";
+import Image from "next/image";
+import { useRouter } from "next/navigation";
+import {
+  Accessibility,
+  GraduationCap,
+  HeartHandshake,
+  House,
+  PawPrint,
+  Search,
+  Users,
+} from "lucide-react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { MarketplaceHeader } from "./marketplace/MarketplaceShell";
+import "./marketplace-home.css";
 
 const services = [
   {
+    slug: "senior-care",
     name: "Senior care",
-    description: "Everyday support, companionship, mobility help, and respectful personal care.",
+    description:
+      "Everyday support, companionship, mobility help, and respectful personal care.",
     mark: "SC",
     tone: "mint",
   },
   {
+    slug: "home-nursing",
     name: "Home nursing",
-    description: "Credentialed nursing support, vital checks, wound care, and recovery plans.",
+    description:
+      "Credentialed nursing support, vital checks, wound care, and recovery plans.",
     mark: "RN",
     tone: "teal",
   },
   {
+    slug: "post-hospital-care",
     name: "Post-hospital care",
-    description: "Confident support at home after discharge, surgery, or a health setback.",
+    description:
+      "Confident support at home after discharge, surgery, or a health setback.",
     mark: "PH",
     tone: "sand",
   },
   {
+    slug: "respite-care",
     name: "Respite care",
-    description: "Trusted relief for family caregivers, from a few hours to extended support.",
+    description:
+      "Trusted relief for family caregivers, from a few hours to extended support.",
     mark: "RC",
     tone: "sky",
   },
   {
+    slug: "disability-care",
     name: "Disability care",
-    description: "Person-centred assistance that supports choice, access, and independence.",
+    description:
+      "Person-centred assistance that supports choice, access, and independence.",
     mark: "DC",
     tone: "lilac",
   },
   {
+    slug: "physiotherapy",
     name: "Physiotherapy",
-    description: "At-home mobility, rehabilitation, and movement support from qualified sellers.",
+    description:
+      "At-home mobility, rehabilitation, and movement support from qualified sellers.",
     mark: "PT",
     tone: "coral",
   },
+];
+
+const popularCategories = [
+  {
+    code: "child_care",
+    name: "Child care",
+    examples: "Babysitter · Nanny",
+    icon: Users,
+  },
+  {
+    code: "senior_care",
+    name: "Senior care",
+    examples: "Companion · Hands-on",
+    icon: HeartHandshake,
+  },
+  {
+    code: "adult_care",
+    name: "Adult care",
+    examples: "Companion · Live-in",
+    icon: Accessibility,
+  },
+  {
+    code: "pet_care",
+    name: "Pet care",
+    examples: "Sitter · Walker",
+    icon: PawPrint,
+  },
+  {
+    code: "housekeeping",
+    name: "Housekeeping",
+    examples: "Cleaning · Errands",
+    icon: House,
+  },
+  {
+    code: "tutoring",
+    name: "Tutoring",
+    examples: "Math · Test prep",
+    icon: GraduationCap,
+  },
+];
+
+const careSearchSuggestions = [
+  { value: "Child care", category: "child_care" },
+  { value: "Babysitter", category: "child_care" },
+  { value: "Nanny", category: "child_care" },
+  { value: "Daycare centers", category: "child_care" },
+  { value: "Special needs child care", category: "child_care" },
+  { value: "Senior care", category: "senior_care" },
+  { value: "Senior companion", category: "senior_care" },
+  { value: "Hands-on senior care", category: "senior_care" },
+  { value: "Live-in senior care", category: "senior_care" },
+  { value: "Adult care", category: "adult_care" },
+  { value: "Adult companion", category: "adult_care" },
+  { value: "Hands-on adult care", category: "adult_care" },
+  { value: "Live-in adult care", category: "adult_care" },
+  { value: "Pet care", category: "pet_care" },
+  { value: "Pet sitter", category: "pet_care" },
+  { value: "Dog walker", category: "pet_care" },
+  { value: "Pet trainer", category: "pet_care" },
+  { value: "Pet groomer", category: "pet_care" },
+  { value: "Housekeeping", category: "housekeeping" },
+  { value: "House cleaner", category: "housekeeping" },
+  { value: "Personal assistant", category: "housekeeping" },
+  { value: "Errands and odd jobs", category: "housekeeping" },
+  { value: "Tutoring", category: "tutoring" },
+  { value: "Math tutor", category: "tutoring" },
+  { value: "Science tutor", category: "tutoring" },
+  { value: "Test prep tutor", category: "tutoring" },
 ];
 
 const sellers = [
@@ -89,132 +184,208 @@ const sellers = [
   },
 ];
 
-type Seller = (typeof sellers)[number];
-
 export default function NanasHome() {
-  const [service, setService] = useState("Senior care");
+  const router = useRouter();
+  const [service, setService] = useState("");
   const [location, setLocation] = useState("Nassau, New Providence");
-  const [searched, setSearched] = useState(false);
-  const [modal, setModal] = useState<"join" | "login" | null>(null);
-  const [selectedSeller, setSelectedSeller] = useState<Seller | null>(null);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [suggestionPosition, setSuggestionPosition] = useState({
+    top: 0,
+    left: 0,
+    width: 360,
+  });
+
+  const matchingSuggestions = useMemo(() => {
+    const query = service.trim().toLowerCase();
+    return careSearchSuggestions
+      .filter((item) => !query || item.value.toLowerCase().includes(query))
+      .slice(0, 6);
+  }, [service]);
 
   const rankedSellers = useMemo(() => {
     const direct = sellers.filter((seller) => seller.service === service);
-    return direct.length ? [...direct, ...sellers.filter((seller) => seller.service !== service)] : sellers;
+    return direct.length
+      ? [...direct, ...sellers.filter((seller) => seller.service !== service)]
+      : sellers;
   }, [service]);
+
+  useEffect(() => {
+    if (!suggestionsOpen) return;
+
+    function positionSuggestions() {
+      const input = searchInputRef.current;
+      if (!input) return;
+      const label = input.closest("label");
+      const anchor = label?.getBoundingClientRect() ?? input.getBoundingClientRect();
+      const width = Math.min(360, window.innerWidth - 32);
+      const left = Math.max(
+        16,
+        Math.min(anchor.left, window.innerWidth - width - 16),
+      );
+      setSuggestionPosition({ top: anchor.bottom + 8, left, width });
+    }
+
+    positionSuggestions();
+    window.addEventListener("resize", positionSuggestions);
+    window.addEventListener("scroll", positionSuggestions, true);
+    return () => {
+      window.removeEventListener("resize", positionSuggestions);
+      window.removeEventListener("scroll", positionSuggestions, true);
+    };
+  }, [suggestionsOpen]);
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSearched(true);
-    requestAnimationFrame(() => document.querySelector("#care-results")?.scrollIntoView({ behavior: "smooth" }));
-  }
-
-  function chooseService(nextService: string) {
-    setService(nextService);
-    setSearched(true);
-    requestAnimationFrame(() => document.querySelector("#care-results")?.scrollIntoView({ behavior: "smooth" }));
+    const query = service.trim();
+    const selected = careSearchSuggestions.find(
+      (item) => item.value.toLowerCase() === query.toLowerCase(),
+    )?.category;
+    const parameters = new URLSearchParams({ area: location });
+    if (selected) parameters.set("category", selected);
+    if (query) parameters.set("search", query);
+    router.push(`/find-care?${parameters.toString()}`);
   }
 
   return (
-    <main>
-      <header className="site-header">
-        <a className="wordmark" href="#top" aria-label="Nanas home">Nanas<span>.</span></a>
-        <nav className="desktop-nav" aria-label="Main navigation">
-          <a href="#care">Find care</a>
-          <a href="#how">How it works</a>
-          <a href="#safety">Safety</a>
-          <a href="#sellers">Become a seller</a>
-        </nav>
-        <div className="header-actions">
-          <button className="link-button" type="button" onClick={() => setModal("login")}>Log in</button>
-          <button className="outline-button" type="button" onClick={() => setModal("join")}>Join Nanas</button>
-        </div>
-      </header>
+    <main className="nanas-home">
+      <MarketplaceHeader />
 
-      <section className="hero" id="top">
-        <div className="hero-copy">
-          <div className="eyebrow"><span /> Healthcare across The Bahamas</div>
-          <h1>Trusted care,<br /><em>close to home.</em></h1>
-          <p className="hero-description">
-            Find verified nurses and care professionals for the people who matter most.
-            Clear profiles, real availability, and support at every step.
-          </p>
+      <div className="home-hero-shell">
+        <section className="hero" id="top">
+          <div className="hero-copy">
+            <div className="eyebrow">
+              <span /> Trusted care across The Bahamas
+            </div>
+            <h1>
+              Trusted care, <em>close to home.</em>
+            </h1>
 
-          <form className="care-search" aria-label="Find healthcare services" onSubmit={submitSearch}>
-            <label>
+            <fieldset className="hero-mode-toggle">
+              <legend>Choose search mode</legend>
+              <button type="button" aria-pressed="true">
+                <span aria-hidden="true" /> Find care
+              </button>
+              <Link href="/post-care-request">
+                <span aria-hidden="true" /> Post request
+              </Link>
+            </fieldset>
+
+            <div className="home-search-overlay">
+              <form
+            className="care-search"
+            aria-label="Find healthcare services"
+            onSubmit={submitSearch}
+          >
+            <label className="care-search-query">
               <span>I&apos;m looking for</span>
-              <select value={service} onChange={(event) => setService(event.target.value)} aria-label="Healthcare service">
-                {services.map((item) => <option key={item.name}>{item.name}</option>)}
-              </select>
+              <input
+                ref={searchInputRef}
+                type="search"
+                value={service}
+                onChange={(event) => {
+                  setService(event.target.value);
+                  setSuggestionsOpen(true);
+                }}
+                onFocus={() => setSuggestionsOpen(true)}
+                onBlur={() => setSuggestionsOpen(false)}
+                aria-label="Healthcare service"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-controls="care-search-suggestion-list"
+                aria-expanded={suggestionsOpen}
+                placeholder="Senior care, nanny, pet…"
+                autoComplete="off"
+              />
             </label>
             <label>
               <span>Near</span>
-              <input value={location} onChange={(event) => setLocation(event.target.value)} aria-label="Location" />
+              <input
+                value={location}
+                onChange={(event) => setLocation(event.target.value)}
+                aria-label="Location"
+              />
             </label>
-            <button type="submit">Find care <span aria-hidden="true">→</span></button>
-          </form>
+            <button className="care-search-submit" type="submit">
+              <span className="care-search-submit-label">Find care</span>
+              <Search aria-hidden="true" />
+            </button>
+              </form>
 
-          <div className="trust-row" aria-label="Nanas trust features">
-            <span>✓ Verified identities</span>
-            <span>✓ Healthcare credentials</span>
-            <span>✓ Booking protection</span>
+              <div
+                className="hero-popular-searches"
+                aria-label="Popular care searches"
+              >
+                <span>Popular:</span>
+                {popularCategories.slice(0, 4).map((item) => (
+                  <Link
+                    key={item.code}
+                    href={`/find-care?category=${item.code}`}
+                  >
+                    {item.name}
+                  </Link>
+                ))}
+              </div>
+
+              <Link className="hero-custom-request" href="/post-care-request">
+                <span aria-hidden="true">⊕</span> Request custom care
+              </Link>
+            </div>
           </div>
-        </div>
+        </section>
+      </div>
 
-        <div className="hero-visual" aria-label="Featured healthcare seller">
-          <div className="hero-orbit hero-orbit-one" />
-          <div className="hero-orbit hero-orbit-two" />
-          <div className="portrait-placeholder">
-            <div className="portrait-person" aria-hidden="true">
-              <span className="portrait-head" />
-              <span className="portrait-body" />
-              <span className="portrait-stethoscope">◡</span>
-            </div>
-            <div className="portrait-copy">
-              <small>Care that feels personal</small>
-              <strong>Professional support,<br />right where you are.</strong>
-            </div>
-          </div>
-          <article className="seller-card">
-            <div className="avatar avatar-deep">AM</div>
-            <div>
-              <div className="seller-name">Alicia M.</div>
-              <div className="seller-role">Registered nurse · Nassau</div>
-              <div className="seller-rating"><b>★ 4.9</b> <span>42 verified reviews</span></div>
-            </div>
-            <div className="verified-badge" aria-label="Identity and credentials verified">✓</div>
-          </article>
-          <div className="availability-card"><span className="pulse" /> Available this week</div>
-        </div>
-      </section>
-
-      <section className="service-strip" aria-label="Popular healthcare services">
-        <p>Popular care</p>
-        {services.slice(0, 4).map((item, index) => (
-          <button type="button" onClick={() => chooseService(item.name)} key={item.name}>
-            <span>{String(index + 1).padStart(2, "0")}</span>{item.name}
-          </button>
+      <section
+        className="service-strip popular-category-strip"
+        aria-label="Popular Nanas care categories"
+      >
+        {popularCategories.map((item) => (
+          <Link
+            href={`/app/buyer/overview?newRequest=1&category=${item.code}&step=1`}
+            key={item.code}
+          >
+            <span className="popular-category-icon">
+              <item.icon />
+            </span>
+            <b>{item.name}</b>
+            <small>{item.examples}</small>
+          </Link>
         ))}
       </section>
 
       <section className="section care-section" id="care">
         <div className="section-heading heading-row">
           <div>
-            <div className="eyebrow"><span /> Care built around people</div>
-            <h2>Healthcare support for<br />every chapter.</h2>
+            <div className="eyebrow">
+              <span /> Care built around people
+            </div>
+            <h2>
+              Healthcare support for
+              <br />
+              every chapter.
+            </h2>
           </div>
-          <p>From regular support to recovery at home, Nanas helps families compare qualified people—not anonymous businesses or agencies.</p>
+          <p>
+            From regular support to recovery at home, Nanas helps families
+            compare qualified people—not anonymous businesses or agencies.
+          </p>
         </div>
         <div className="service-grid">
           {services.map((item) => (
-            <button className="service-card" type="button" key={item.name} onClick={() => chooseService(item.name)}>
+            <Link
+              className="service-card"
+              href={`/services/${item.slug}`}
+              key={item.name}
+            >
               <span className={`service-mark ${item.tone}`}>{item.mark}</span>
               <span className="service-card-copy">
                 <strong>{item.name}</strong>
                 <small>{item.description}</small>
               </span>
-              <span className="round-arrow" aria-hidden="true">↗</span>
-            </button>
+              <span className="round-arrow" aria-hidden="true">
+                ↗
+              </span>
+            </Link>
           ))}
         </div>
       </section>
@@ -222,17 +393,23 @@ export default function NanasHome() {
       <section className="section results-section" id="care-results">
         <div className="results-topline">
           <div>
-            <div className="eyebrow"><span /> Verified individual sellers</div>
-            <h2>{searched ? `${service} near ${location}` : "Care professionals families trust."}</h2>
+            <div className="eyebrow">
+              <span /> Verified individual sellers
+            </div>
+            <h2>Care professionals families trust.</h2>
           </div>
-          <a href="#care">View all care <span aria-hidden="true">→</span></a>
+          <Link href="/find-care">
+            View all sellers <span aria-hidden="true">→</span>
+          </Link>
         </div>
         <div className="profile-grid">
           {rankedSellers.map((seller) => (
             <article className="profile-card" key={seller.name}>
               <div className={`profile-photo ${seller.color}`}>
                 <span>{seller.initials}</span>
-                <div className="profile-availability"><i /> {seller.availability}</div>
+                <div className="profile-availability">
+                  <i /> {seller.availability}
+                </div>
               </div>
               <div className="profile-body">
                 <div className="profile-line">
@@ -244,11 +421,20 @@ export default function NanasHome() {
                 </div>
                 <p className="profile-location">⌖ {seller.location}</p>
                 <div className="badge-row">
-                  {seller.badges.slice(0, 2).map((badge) => <span key={badge}>✓ {badge}</span>)}
+                  {seller.badges.slice(0, 2).map((badge) => (
+                    <span key={badge}>✓ {badge}</span>
+                  ))}
                 </div>
                 <div className="profile-footer">
-                  <div><strong>${seller.price}</strong><span> BSD / hour</span></div>
-                  <button type="button" onClick={() => setSelectedSeller(seller)}>View profile</button>
+                  <div>
+                    <strong>${seller.price}</strong>
+                    <span> BSD / hour</span>
+                  </div>
+                  <Link
+                    href={`/providers/${seller.name.startsWith("Alicia") ? "alicia-m" : seller.name.startsWith("Marcus") ? "marcus-d" : "simone-r"}`}
+                  >
+                    View full profile
+                  </Link>
                 </div>
               </div>
             </article>
@@ -258,15 +444,32 @@ export default function NanasHome() {
 
       <section className="how-section" id="how">
         <div className="section-heading centered-heading">
-          <div className="eyebrow"><span /> Simple from the start</div>
+          <div className="eyebrow">
+            <span /> Simple from the start
+          </div>
           <h2>Find the right care in three steps.</h2>
-          <p>Clear choices, verified information, and a booking record you can return to whenever you need it.</p>
+          <p>
+            Clear choices, verified information, and a booking record you can
+            return to whenever you need it.
+          </p>
         </div>
         <div className="steps-grid">
           {[
-            ["01", "Tell us what you need", "Choose a healthcare service, your area, timing, and the needs that matter for the care recipient."],
-            ["02", "Compare verified sellers", "Review credentials, experience, rates, availability, badges, and reviews from completed bookings."],
-            ["03", "Book with confidence", "Confirm the visit, pay through Nanas, message securely, and keep every update in one place."],
+            [
+              "01",
+              "Tell us what you need",
+              "Choose a healthcare service, your area, timing, and the needs that matter for the care recipient.",
+            ],
+            [
+              "02",
+              "Compare verified sellers",
+              "Review credentials, experience, rates, availability, badges, and reviews from completed bookings.",
+            ],
+            [
+              "03",
+              "Book with confidence",
+              "Confirm the visit, pay through Nanas, message securely, and keep every update in one place.",
+            ],
           ].map(([number, title, copy]) => (
             <article className="step-card" key={number}>
               <span>{number}</span>
@@ -278,109 +481,228 @@ export default function NanasHome() {
       </section>
 
       <section className="safety-section" id="safety">
-        <div className="safety-art" aria-hidden="true">
-          <div className="shield-ring"><span>✓</span></div>
-          <div className="safety-pill safety-pill-one">Identity checked</div>
-          <div className="safety-pill safety-pill-two">Credentials reviewed</div>
-          <div className="safety-pill safety-pill-three">Verified reviews</div>
+        <div className="safety-photo">
+          <Image
+            alt="A Nanas caregiver helping an older woman move safely at home"
+            fill
+            priority={false}
+            sizes="(max-width: 980px) 100vw, 46vw"
+            src="/nanas/hero-safety.png"
+          />
         </div>
         <div className="safety-copy">
-          <div className="eyebrow light"><span /> Trust is a process</div>
+          <div className="eyebrow light">
+            <span /> Trust is a process
+          </div>
           <h2>Designed to make care feel clearer.</h2>
-          <p>Nanas gives buyers practical information before they book and keeps sellers accountable to the services they are approved to provide.</p>
+          <p>
+            Nanas gives buyers practical information before they book and keeps
+            sellers accountable to the services they are approved to provide.
+          </p>
           <ul>
-            <li><b>Clear verification labels</b><span>See exactly which checks and healthcare credentials are current.</span></li>
-            <li><b>Two-way visit verification</b><span>Buyer and seller confirm a secure session code at the start of care.</span></li>
-            <li><b>Reviews tied to real bookings</b><span>Only completed, eligible bookings can create public reviews.</span></li>
+            <li>
+              <b>Clear verification labels</b>
+              <span>
+                See exactly which checks and healthcare credentials are current.
+              </span>
+            </li>
+            <li>
+              <b>Two-way visit verification</b>
+              <span>
+                Buyer and seller confirm a secure session code at the start of
+                care.
+              </span>
+            </li>
+            <li>
+              <b>Reviews tied to real bookings</b>
+              <span>
+                Only completed, eligible bookings can create public reviews.
+              </span>
+            </li>
           </ul>
-          <a href="#top">Learn about Nanas safety <span aria-hidden="true">→</span></a>
+          <Link href="/safety">
+            Learn about Nanas safety <span aria-hidden="true">→</span>
+          </Link>
         </div>
       </section>
 
+      {suggestionsOpen &&
+      matchingSuggestions.length > 0 &&
+      typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="nanas-care-search-suggestions"
+              id="care-search-suggestion-list"
+              role="listbox"
+              style={suggestionPosition}
+            >
+              {matchingSuggestions.map((item) => (
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={service === item.value}
+                  key={item.value}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    setService(item.value);
+                    setSuggestionsOpen(false);
+                  }}
+                >
+                  <strong>{item.value}</strong>
+                  <small>
+                    {
+                      popularCategories.find(
+                        (category) => category.code === item.category,
+                      )?.name
+                    }
+                  </small>
+                </button>
+              ))}
+            </div>,
+            document.body,
+          )
+        : null}
+
       <section className="seller-cta" id="sellers">
         <div className="seller-cta-copy">
-          <div className="eyebrow"><span /> For healthcare sellers</div>
-          <h2>Your care makes a difference.<br /><em>Let people find it.</em></h2>
-          <p>Create an individual profile, share your approved healthcare services and availability, and manage care bookings in one calm place.</p>
-          <button type="button" onClick={() => setModal("join")}>Become a Nanas seller <span>→</span></button>
-          <small>No agencies, business accounts, job bidding, or shift rosters.</small>
+          <div className="eyebrow">
+            <span /> For healthcare sellers
+          </div>
+          <h2>
+            Your care makes a difference.
+            <br />
+            <em>Let people find it.</em>
+          </h2>
+          <p>
+            Create an individual profile, share your approved healthcare
+            services and availability, and manage care bookings in one calm
+            place.
+          </p>
+          <Link className="seller-cta-button" href="/become-a-seller">
+            Become a Nanas seller <span>→</span>
+          </Link>
+          <small>
+            No agencies, business accounts, job bidding, or shift rosters.
+          </small>
         </div>
         <div className="seller-stat-grid">
-          <article><strong>1</strong><span>individual profile</span></article>
-          <article><strong>3</strong><span>clear account roles</span></article>
-          <article><strong>100%</strong><span>healthcare-focused</span></article>
-          <article><strong>BSD</strong><span>local pricing</span></article>
+          <article>
+            <strong>1</strong>
+            <span>individual profile</span>
+          </article>
+          <article>
+            <strong>3</strong>
+            <span>clear account roles</span>
+          </article>
+          <article>
+            <strong>100%</strong>
+            <span>healthcare-focused</span>
+          </article>
+          <article>
+            <strong>BSD</strong>
+            <span>local pricing</span>
+          </article>
         </div>
       </section>
 
       <section className="testimonial-section">
         <div className="quote-mark">“</div>
         <blockquote>
-          Finding someone for my mother felt overwhelming. Nanas made it easier to understand who was qualified, when they were free, and what the visit would cost.
+          Finding someone for my mother felt overwhelming. Nanas made it easier
+          to understand who was qualified, when they were free, and what the
+          visit would cost.
         </blockquote>
-        <div className="quote-person"><span>CB</span><div><b>Carla B.</b><small>Buyer in Nassau</small></div></div>
+        <div className="quote-person">
+          <span>CB</span>
+          <div>
+            <b>Carla B.</b>
+            <small>Buyer in Nassau</small>
+          </div>
+        </div>
       </section>
 
       <section className="faq-section">
         <div>
-          <div className="eyebrow"><span /> Helpful answers</div>
+          <div className="eyebrow">
+            <span /> Helpful answers
+          </div>
           <h2>Questions are part of good care.</h2>
           <p>We make the important details easy to find before you book.</p>
         </div>
         <div className="faq-list">
-          <details open><summary>Who can sell healthcare services on Nanas?<span>+</span></summary><p>Only individual sellers may apply. Each healthcare service has its own identity, credential, background, and eligibility requirements before it can appear on a public profile.</p></details>
-          <details><summary>Does Nanas employ the sellers?<span>+</span></summary><p>Nanas is a care-booking platform. The exact legal relationship and seller agreement will be shown clearly before either party commits to a booking.</p></details>
-          <details><summary>How are reviews verified?<span>+</span></summary><p>Reviews are available only after an eligible completed booking and are tied to that transaction. They use a double-blind publishing window to reduce retaliation.</p></details>
-          <details><summary>Is Nanas an emergency service?<span>+</span></summary><p>No. Nanas is not an emergency service. Urgent or life-threatening situations should be handled through locally approved emergency channels.</p></details>
+          <details open>
+            <summary>
+              Who can sell healthcare services on Nanas?<span>+</span>
+            </summary>
+            <p>
+              Only individual sellers may apply. Each healthcare service has its
+              own identity, credential, background, and eligibility requirements
+              before it can appear on a public profile.
+            </p>
+          </details>
+          <details>
+            <summary>
+              Does Nanas employ the sellers?<span>+</span>
+            </summary>
+            <p>
+              Nanas is a care-booking platform. The exact legal relationship and
+              seller agreement will be shown clearly before either party commits
+              to a booking.
+            </p>
+          </details>
+          <details>
+            <summary>
+              How are reviews verified?<span>+</span>
+            </summary>
+            <p>
+              Reviews are available only after an eligible completed booking and
+              are tied to that transaction. They use a double-blind publishing
+              window to reduce retaliation.
+            </p>
+          </details>
+          <details>
+            <summary>
+              Is Nanas an emergency service?<span>+</span>
+            </summary>
+            <p>
+              No. Nanas is not an emergency service. Urgent or life-threatening
+              situations should be handled through locally approved emergency
+              channels.
+            </p>
+          </details>
         </div>
       </section>
 
       <footer>
-        <div className="footer-brand"><a className="wordmark" href="#top">Nanas<span>.</span></a><p>Trusted healthcare, close to home.</p></div>
-        <div><b>For buyers</b><a href="#care">Find care</a><a href="#how">How it works</a><a href="#safety">Safety</a></div>
-        <div><b>For sellers</b><a href="#sellers">Join as a seller</a><a href="#care">Healthcare services</a><a href="#top">Seller standards</a></div>
-        <div><b>Nanas</b><a href="#top">About</a><a href="#top">Help centre</a><a href="#top">Contact</a></div>
-        <div className="footer-bottom"><span>© 2026 Nanas. Built for The Bahamas.</span><span>Privacy · Terms · Accessibility</span></div>
+        <div className="footer-brand">
+          <Link className="wordmark" href="/">
+            Nanas<span>.</span>
+          </Link>
+          <p>Trusted healthcare, close to home.</p>
+        </div>
+        <div>
+          <b>For buyers</b>
+          <Link href="/find-care">Find care</Link>
+          <Link href="/post-care-request">Post care request</Link>
+          <Link href="/safety">Safety</Link>
+        </div>
+        <div>
+          <b>For sellers</b>
+          <Link href="/become-a-seller">Join as a seller</Link>
+          <Link href="/care-requests">Care requests</Link>
+          <Link href="/services">Healthcare services</Link>
+        </div>
+        <div>
+          <b>Nanas</b>
+          <Link href="/how-it-works">How it works</Link>
+          <Link href="/safety">Trust and safety</Link>
+          <Link href="/auth">Account</Link>
+        </div>
+        <div className="footer-bottom">
+          <span>© 2026 Nanas. Built for The Bahamas.</span>
+          <span>Privacy · Terms · Accessibility</span>
+        </div>
       </footer>
-
-      {modal && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={() => setModal(null)}>
-          <section className="modal-card" role="dialog" aria-modal="true" aria-labelledby="account-title" onMouseDown={(event) => event.stopPropagation()}>
-            <button className="modal-close" type="button" aria-label="Close" onClick={() => setModal(null)}>×</button>
-            <div className="modal-mark">N.</div>
-            <h2 id="account-title">{modal === "login" ? "Welcome back." : "How will you use Nanas?"}</h2>
-            <p>{modal === "login" ? "Account access will connect to secure Nanas authentication." : "Choose your starting role. One account can use buyer and seller capabilities."}</p>
-            {modal === "login" ? (
-              <form className="login-form" onSubmit={(event) => event.preventDefault()}>
-                <label>Email or phone<input placeholder="you@example.com" /></label>
-                <button type="submit">Continue securely</button>
-                <small>Authentication connection is the next implementation step.</small>
-              </form>
-            ) : (
-              <div className="role-options">
-                <button type="button"><span>Buyer</span><small>I need healthcare or care support</small><b>→</b></button>
-                <button type="button"><span>Seller</span><small>I personally provide healthcare services</small><b>→</b></button>
-              </div>
-            )}
-          </section>
-        </div>
-      )}
-
-      {selectedSeller && (
-        <div className="modal-backdrop" role="presentation" onMouseDown={() => setSelectedSeller(null)}>
-          <section className="modal-card seller-modal" role="dialog" aria-modal="true" aria-labelledby="seller-title" onMouseDown={(event) => event.stopPropagation()}>
-            <button className="modal-close" type="button" aria-label="Close" onClick={() => setSelectedSeller(null)}>×</button>
-            <div className={`modal-avatar ${selectedSeller.color}`}>{selectedSeller.initials}</div>
-            <div className="eyebrow"><span /> {selectedSeller.availability}</div>
-            <h2 id="seller-title">{selectedSeller.name}</h2>
-            <h3>{selectedSeller.role} · {selectedSeller.location}</h3>
-            <p>{selectedSeller.bio}</p>
-            <div className="modal-badges">{selectedSeller.badges.map((badge) => <span key={badge}>✓ {badge}</span>)}</div>
-            <div className="modal-price"><div><b>★ {selectedSeller.rating}</b><span>{selectedSeller.reviews} verified reviews</span></div><div><b>${selectedSeller.price} BSD</b><span>per hour</span></div></div>
-            <button className="primary-wide" type="button" onClick={() => { setSelectedSeller(null); setModal("login"); }}>Request care with {selectedSeller.name.split(" ")[0]}</button>
-          </section>
-        </div>
-      )}
     </main>
   );
 }
