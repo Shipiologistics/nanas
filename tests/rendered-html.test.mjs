@@ -615,3 +615,43 @@ test("private storage, notifications, maintenance, and verified webhooks are sca
   assert.match(config, /site_url = "http:\/\/localhost:3000"/);
   assert.match(config, /project_id = "nanas"/);
 });
+
+test("Cloudinary image uploads are signed, authenticated, and purpose-scoped", async () => {
+  const unsignedAttempt = await fetch(
+    `http://127.0.0.1:${port}/api/uploads/images/sign`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "profile",
+        mimeType: "image/png",
+        bytes: 128,
+      }),
+    },
+  );
+  assert.equal(unsignedAttempt.status, 401);
+
+  const [client, server, policy, migration, envExample] = await Promise.all([
+    readFile(new URL("../lib/cloudinary-client.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/cloudinary-server.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/cloudinary-policy.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL(
+        "../supabase/migrations/20260828151913_cloudinary_media_support.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+    readFile(new URL("../.env.example", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(client, /\/api\/uploads\/images\/sign/);
+  assert.match(client, /\/api\/uploads\/images\/verify/);
+  assert.match(server, /signature_algorithm: "sha256"/);
+  assert.match(server, /timingSafeEqual/);
+  assert.match(policy, /deliveryType: "authenticated"/);
+  assert.match(policy, /sellerOnly: true/);
+  assert.match(migration, /cloudinary:image:upload/);
+  assert.match(envExample, /^CLOUDINARY_API_SECRET=/m);
+  assert.doesNotMatch(envExample, /^NEXT_PUBLIC_CLOUDINARY_API_SECRET=/m);
+});

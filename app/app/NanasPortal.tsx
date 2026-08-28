@@ -68,6 +68,13 @@ import {
 } from "../../lib/demo-data";
 import { getSupabase, isSupabaseConfigured } from "../../lib/supabase";
 import {
+  cloudinaryPublicImageUrl,
+  deleteImage,
+  parseCloudinaryAssetRef,
+  uploadImage,
+  type UploadedImage,
+} from "../../lib/cloudinary-client";
+import {
   DetailNotFound,
   NanasCareRequestDetail,
   NanasProviderProfile,
@@ -82,6 +89,7 @@ import "./portal-overrides.css";
 import "./buyer-experience.css";
 import "./buyer-filter-enhancements.css";
 import "./marketplace-makeover.css";
+import "./cloudinary-images.css";
 
 type Modal =
   | "request"
@@ -112,6 +120,15 @@ type Modal =
   | null;
 const isLegacyRequestWizard = (modal: Modal, step: number) =>
   modal === "request" && step === -1;
+
+function resolveProfileMediaUrl(path?: string | null) {
+  if (!path) return undefined;
+  const cloudinaryAsset = parseCloudinaryAssetRef(path);
+  if (cloudinaryAsset) return cloudinaryPublicImageUrl(path);
+  return getSupabase()
+    ?.storage.from("public-profile-media")
+    .getPublicUrl(path).data.publicUrl;
+}
 type NavItem = { id: string; label: string; icon: ReactNode; count?: number };
 type RequestRecipient = {
   id: string;
@@ -1335,7 +1352,7 @@ export default function NanasPortal({
             item.status === "needs_information"
               ? item.status
               : ("pending" as const),
-          fileName: "Private Supabase document",
+          fileName: "Private verification document",
           submittedAt: item.created_at,
         }));
         const hydratedDisputes = (remoteDisputes ?? []).map((item) => ({
@@ -1921,11 +1938,7 @@ export default function NanasPortal({
           if (connectedSeller)
             connectedUsers.set(seller.user_id, {
               ...connectedSeller,
-              avatarUrl: seller.avatar_path
-                ? supabase.storage
-                    .from("public-profile-media")
-                    .getPublicUrl(seller.avatar_path).data.publicUrl
-                : undefined,
+              avatarUrl: resolveProfileMediaUrl(seller.avatar_path),
               sellerDetails: {
                 headline: seller.headline ?? undefined,
                 locality: seller.locality ?? undefined,
@@ -3432,14 +3445,17 @@ export default function NanasPortal({
     const file = form.get("file") as File;
     if (!file?.name) return notify("Choose a document first.");
     setBusy(true);
+    let cloudinaryUpload: UploadedImage | null = null;
     try {
-      const uploaded = backendConnected
-        ? await issueUploadUrl("seller-documents", file)
+      const uploadedPath = backendConnected
+        ? file.type === "application/pdf"
+          ? (await issueUploadUrl("seller-documents", file)).path
+          : ((cloudinaryUpload = await uploadImage(file, "verification"))).databasePath
         : null;
-      const created = uploaded
+      const created = uploadedPath
         ? ((await syncCommand("submit_verification_document", {
             document_type: String(form.get("type")),
-            storage_path: uploaded.path,
+            storage_path: uploadedPath,
             original_name: file.name,
           })) as { case_id?: string } | null)
         : null;
@@ -3459,8 +3475,10 @@ export default function NanasPortal({
         ],
       }));
       setModal(null);
-      notify("Document uploaded to the private KYC queue.");
+      notify("Document uploaded securely to the private KYC queue.");
     } catch (error) {
+      if (cloudinaryUpload)
+        void deleteImage(cloudinaryUpload.publicId, "verification").catch(() => undefined);
       notify(error instanceof Error ? error.message : "Upload failed");
     } finally {
       setBusy(false);
@@ -4265,11 +4283,15 @@ export default function NanasPortal({
       islandId: String(form.get("islandId")) || undefined,
       locality: String(form.get("locality")),
     };
+    const previousAvatarPath = sellerProfileForm.avatarPath;
+    let cloudinaryUpload: UploadedImage | null = null;
+    setBusy(true);
     try {
-      if (photo instanceof File && photo.size > 0)
-        next.avatarPath = (
-          await issueUploadUrl("public-profile-media", photo, "profile-photo")
-        ).path;
+      if (photo instanceof File && photo.size > 0) {
+        if (!backendConnected) throw new Error("Sign in to upload and save a profile photo");
+        cloudinaryUpload = await uploadImage(photo, "profile");
+        next.avatarPath = cloudinaryUpload.assetRef;
+      }
       await syncCommand("seller_update_public_profile", {
         display_name: next.displayName,
         avatar_path: next.avatarPath,
@@ -4280,13 +4302,7 @@ export default function NanasPortal({
         vaccinations: next.vaccinations,
         additional_details: next.additionalDetails,
       });
-      const supabase = getSupabase();
-      const avatarUrl =
-        next.avatarPath && supabase
-          ? supabase.storage
-              .from("public-profile-media")
-              .getPublicUrl(next.avatarPath).data.publicUrl
-          : undefined;
+      const avatarUrl = cloudinaryUpload?.secureUrl ?? resolveProfileMediaUrl(next.avatarPath);
       setSellerProfileForm(next);
       setAuthIdentity((identity) =>
         identity
@@ -4322,8 +4338,15 @@ export default function NanasPortal({
       }));
       setModal(null);
       notify("Public seller profile saved.");
+      const previousCloudinaryAsset = parseCloudinaryAssetRef(previousAvatarPath);
+      if (previousCloudinaryAsset && previousAvatarPath !== next.avatarPath)
+        void deleteImage(previousCloudinaryAsset.publicId, "profile").catch(() => undefined);
     } catch (error) {
+      if (cloudinaryUpload)
+        void deleteImage(cloudinaryUpload.publicId, "profile").catch(() => undefined);
       notify(error instanceof Error ? error.message : "Profile update failed");
+    } finally {
+      setBusy(false);
     }
   }
   async function saveSellerCoverage(event: FormEvent<HTMLFormElement>) {
@@ -4488,7 +4511,10 @@ export default function NanasPortal({
                 chooseSection("account");
               }}
             >
-              <span>{currentUser.avatar}</span>
+              <span
+                className={currentUser.avatarUrl ? "has-photo" : undefined}
+                style={currentUser.avatarUrl ? { backgroundImage: `url(${currentUser.avatarUrl})` } : undefined}
+              >{currentUser.avatarUrl ? null : currentUser.avatar}</span>
               <div>
                 <b>{currentUser.name}</b>
                 <small>My account</small>
@@ -4616,7 +4642,10 @@ export default function NanasPortal({
                     : "buyer-profile"
                 }
               >
-                <span>{currentUser.avatar}</span>
+                <span
+                  className={currentUser.avatarUrl ? "has-photo" : undefined}
+                  style={currentUser.avatarUrl ? { backgroundImage: `url(${currentUser.avatarUrl})` } : undefined}
+                >{currentUser.avatarUrl ? null : currentUser.avatar}</span>
                 <div>
                   <b>{currentUser.name}</b>
                   <small>Seller account</small>
@@ -4843,7 +4872,10 @@ export default function NanasPortal({
             ))}
           </div>
           <div className="portal-user">
-            <span>{currentUser.avatar}</span>
+            <span
+              className={currentUser.avatarUrl ? "has-photo" : undefined}
+              style={currentUser.avatarUrl ? { backgroundImage: `url(${currentUser.avatarUrl})` } : undefined}
+            >{currentUser.avatarUrl ? null : currentUser.avatar}</span>
             <div>
               <b>{currentUser.name}</b>
               <small>{role}</small>
@@ -6419,11 +6451,8 @@ export default function NanasPortal({
   }
 
   function renderSeller() {
-    const sellerProfilePhotoUrl = sellerProfileForm.avatarPath
-      ? getSupabase()
-          ?.storage.from("public-profile-media")
-          .getPublicUrl(sellerProfileForm.avatarPath).data.publicUrl
-      : currentUser.avatarUrl;
+    const sellerProfilePhotoUrl =
+      resolveProfileMediaUrl(sellerProfileForm.avatarPath) ?? currentUser.avatarUrl;
     const sellerVerificationApproved = state.kyc.some(
       (item) => item.sellerId === currentUserId && item.status === "approved",
     );
@@ -6826,6 +6855,7 @@ export default function NanasPortal({
             availability={availabilityRows}
             coverage={sellerCoverageRows}
             verificationApproved={sellerVerificationApproved}
+            busy={busy}
             onSubmit={saveSellerProfile}
             onEditServices={() => setSection("services")}
             onEditAvailability={() => setSection("availability")}
@@ -12245,7 +12275,7 @@ export default function NanasPortal({
         <ModalHead
           icon={<FileCheck2 />}
           title="Upload verification document"
-          copy="For beta, documents use a private Supabase Storage bucket. Cloudinary can replace public media later."
+          copy="Images use authenticated Cloudinary delivery; PDFs remain in the private Supabase document bucket."
         />
         <form className="portal-form" onSubmit={uploadKyc}>
           <label>
@@ -12262,7 +12292,7 @@ export default function NanasPortal({
             <input
               name="file"
               type="file"
-              accept="image/jpeg,image/png,application/pdf"
+              accept="image/jpeg,image/png,image/webp,application/pdf"
               required
             />
           </label>

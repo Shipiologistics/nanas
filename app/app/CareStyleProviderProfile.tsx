@@ -6,6 +6,7 @@ import { BadgeCheck, CalendarDays, Check, ChevronRight, Clock3, Heart, Languages
 import type { DemoUser } from "../../lib/demo-data";
 import { AvailabilityCalendar } from "./AvailabilityCalendar";
 import "./care-style-profile.css";
+import "./cloudinary-images.css";
 
 const money = (amount: number) => new Intl.NumberFormat("en-BS", { style: "currency", currency: "BSD", maximumFractionDigits: 0 }).format(amount);
 const weekDays = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -66,6 +67,6 @@ export function CareStyleProviderProfile({ seller, relatedSellers, favorite, onT
       </main>
     </div>
 
-    {relatedSellers.length > 0 && <section className="care-profile-related"><header><div><span>More approved sellers</span><h2>Continue comparing care.</h2></div><Link href={backHref}>See all sellers</Link></header><div>{relatedSellers.slice(0, 3).map((related) => <Link href={`${relatedHrefBase}/${related.id}`} key={related.id}><span>{related.avatar}</span><div><b>{related.name}</b><small>{related.sellerDetails?.headline || "Approved healthcare seller"}</small><em><Star className="filled" />{related.sellerDetails?.rating?.toFixed(1) || "New"} · From {money(related.sellerDetails?.services[0]?.rate || 0)}/hr</em></div><ChevronRight /></Link>)}</div></section>}
+    {relatedSellers.length > 0 && <section className="care-profile-related"><header><div><span>More approved sellers</span><h2>Continue comparing care.</h2></div><Link href={backHref}>See all sellers</Link></header><div>{relatedSellers.slice(0, 3).map((related) => <Link href={`${relatedHrefBase}/${related.id}`} key={related.id}><span className={related.avatarUrl ? "has-photo" : undefined} style={related.avatarUrl ? { backgroundImage: `url(${related.avatarUrl})` } : undefined}>{related.avatarUrl ? null : related.avatar}</span><div><b>{related.name}</b><small>{related.sellerDetails?.headline || "Approved healthcare seller"}</small><em><Star className="filled" />{related.sellerDetails?.rating?.toFixed(1) || "New"} · From {money(related.sellerDetails?.services[0]?.rate || 0)}/hr</em></div><ChevronRight /></Link>)}</div></section>}
   </div>;
 }

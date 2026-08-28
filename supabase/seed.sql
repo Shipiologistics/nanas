@@ -42,7 +42,7 @@ insert into public.feature_flags (key,description,enabled,rollout_percent) value
 ('seller_quotes','Allow approved sellers to quote on healthcare care requests.',true,100),
 ('realtime_messages','Enable booking-scoped realtime messaging.',true,100),
 ('manual_kyc','Use Nanas admin review for seller KYC during beta.',true,100),
-('cloudinary_uploads','Use Cloudinary instead of Supabase Storage for public media.',false,0)
+('cloudinary_uploads','Use signed Cloudinary uploads for public and protected image media.',true,100)
 on conflict (key) do update set description=excluded.description,enabled=excluded.enabled,rollout_percent=excluded.rollout_percent;
 
 insert into public.system_settings (key,value) values

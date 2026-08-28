@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { BadgeCheck, CalendarDays, Camera, Check, Clock3, FileCheck2, Languages, MapPin, ShieldCheck, Sparkles, Star, Stethoscope, Syringe } from "lucide-react";
 import type { DemoUser } from "../../lib/demo-data";
 import "./seller-profile-studio.css";
@@ -25,6 +25,7 @@ type SellerProfileStudioProps = {
   availability: { id: string; weekday: number; start: string; end: string; active: boolean }[];
   coverage: { id: string; name: string; radius: number; travelFee: number; active: boolean }[];
   verificationApproved: boolean;
+  busy?: boolean;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onEditServices: () => void;
   onEditAvailability: () => void;
@@ -35,7 +36,17 @@ type SellerProfileStudioProps = {
 const money = (amount: number) => new Intl.NumberFormat("en-BS", { style: "currency", currency: "BSD", maximumFractionDigits: 0 }).format(amount);
 const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-export function SellerProfileStudio({ user, profile, photoUrl, islands, services, availability, coverage, verificationApproved, onSubmit, onEditServices, onEditAvailability, onEditCoverage, onOpenVerification }: SellerProfileStudioProps) {
+export function SellerProfileStudio({ user, profile, photoUrl, islands, services, availability, coverage, verificationApproved, busy = false, onSubmit, onEditServices, onEditAvailability, onEditCoverage, onOpenVerification }: SellerProfileStudioProps) {
+  const [localPhotoUrl, setLocalPhotoUrl] = useState<string>();
+  useEffect(() => () => {
+    if (localPhotoUrl) URL.revokeObjectURL(localPhotoUrl);
+  }, [localPhotoUrl]);
+  function previewPhoto(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    if (localPhotoUrl) URL.revokeObjectURL(localPhotoUrl);
+    setLocalPhotoUrl(file ? URL.createObjectURL(file) : undefined);
+  }
+  const displayedPhotoUrl = localPhotoUrl ?? photoUrl;
   const activeServices = services.filter((item) => item.active);
   const [previewServiceId, setPreviewServiceId] = useState(activeServices[0]?.id ?? "");
   const previewService = activeServices.find((item) => item.id === previewServiceId) ?? activeServices[0];
@@ -58,13 +69,13 @@ export function SellerProfileStudio({ user, profile, photoUrl, islands, services
 
     <div className="seller-profile-studio-grid">
       <form className="seller-profile-builder" onSubmit={onSubmit}>
-        <header><div><span>Profile builder</span><h2>Create the profile buyers compare.</h2><p>Identity details are shared across your profile. Each healthcare service keeps its own biography, experience, capabilities and rate range.</p></div><button type="submit">Save identity details</button></header>
+        <header><div><span>Profile builder</span><h2>Create the profile buyers compare.</h2><p>Identity details are shared across your profile. Each healthcare service keeps its own biography, experience, capabilities and rate range.</p></div><button type="submit" disabled={busy}>{busy ? "Uploading…" : "Save identity details"}</button></header>
 
         <fieldset>
           <legend><span>1</span><div><b>Public identity</b><small>Your name, profile photo and Bahamas location.</small></div></legend>
           <div className="seller-photo-field">
-            <div className={`seller-photo-preview ${photoUrl ? "has-photo" : ""}`} style={photoUrl ? { backgroundImage: `url(${photoUrl})` } : undefined}>{photoUrl ? null : initials}<i><BadgeCheck /></i></div>
-            <label><Camera /><span><b>Profile photo</b><small>JPG, PNG or WebP · maximum 5 MB</small></span><input name="profilePhoto" type="file" accept="image/jpeg,image/png,image/webp" /></label>
+            <div className={`seller-photo-preview ${displayedPhotoUrl ? "has-photo" : ""}`} style={displayedPhotoUrl ? { backgroundImage: `url(${displayedPhotoUrl})` } : undefined}>{displayedPhotoUrl ? null : initials}<i><BadgeCheck /></i></div>
+            <label><Camera /><span><b>Profile photo</b><small>JPG, PNG or WebP · maximum 5 MB · preview before upload</small></span><input name="profilePhoto" type="file" accept="image/jpeg,image/png,image/webp" onChange={previewPhoto} disabled={busy} /></label>
           </div>
           <div className="seller-profile-form-grid">
             <label>Public display name<input name="displayName" required minLength={2} maxLength={80} defaultValue={profile.displayName || user.name} /></label>
@@ -85,7 +96,7 @@ export function SellerProfileStudio({ user, profile, photoUrl, islands, services
 
         <section className="seller-service-profile-callout"><Sparkles /><div><b>Create 1–3 service-specific profiles</b><p>Every category needs its own substantial About section, years of experience, rate range, care qualifications and additional help. Buyers switch between these profiles without losing your shared identity and safety information.</p></div><button type="button" onClick={onEditServices}>Edit service profiles</button></section>
 
-        <footer><span><ShieldCheck />Changes remain subject to Nanas verification and moderation.</span><button type="submit">Save identity details</button></footer>
+        <footer><span><ShieldCheck />Changes remain subject to Nanas verification and moderation.</span><button type="submit" disabled={busy}>{busy ? "Uploading…" : "Save identity details"}</button></footer>
       </form>
 
       <aside className="seller-profile-live-preview">
