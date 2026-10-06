@@ -1,6 +1,12 @@
 docs/
 tests/
-supabase/
+supabase/*
+!supabase/functions/
+supabase/functions/*
+!supabase/functions/_shared/
+supabase/functions/_shared/*
+!supabase/functions/_shared/admin-message-page.mjs
+!supabase/functions/_shared/provider-onboarding.mjs
 coverage/
 dist/
 .wrangler/
