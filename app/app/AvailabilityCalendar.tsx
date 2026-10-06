@@ -13,12 +13,12 @@ const timeLabel = (value: string) => {
   return new Intl.DateTimeFormat("en-BS", { hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(new Date(Date.UTC(2026, 0, 1, hours, minutes)));
 };
 
-export function AvailabilityCalendar({ availability, updatedAt }: { availability: AvailabilityRule[]; updatedAt?: string }) {
+export function AvailabilityCalendar({ availability }: { availability: AvailabilityRule[]; updatedAt?: string }) {
   const seed = useMemo(() => {
-    const parsed = updatedAt ? new Date(updatedAt) : new Date();
-    return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
-  }, [updatedAt]);
-  const todayKey = useMemo(() => new Date().toISOString().slice(0, 10), []);
+    const day = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Nassau", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    return new Date(`${day}T12:00:00Z`);
+  }, []);
+  const todayKey = seed.toISOString().slice(0, 10);
   const [visibleMonth, setVisibleMonth] = useState(() => ({ year: seed.getUTCFullYear(), month: seed.getUTCMonth() }));
   const [selectedDate, setSelectedDate] = useState(() => {
     const seedDay = seed.getUTCDate();
@@ -36,7 +36,9 @@ export function AvailabilityCalendar({ availability, updatedAt }: { availability
   const selectedWeekday = selectedDate ? new Date(`${selectedDate}T12:00:00Z`).getUTCDay() : -1;
   const selectedRules = availability.filter((rule) => rule.weekday === selectedWeekday);
 
+  const atCurrentMonth = visibleMonth.year === seed.getUTCFullYear() && visibleMonth.month === seed.getUTCMonth();
   const moveMonth = (delta: number) => {
+    if (delta < 0 && atCurrentMonth) return;
     const next = new Date(Date.UTC(visibleMonth.year, visibleMonth.month + delta, 1));
     const nextYear = next.getUTCFullYear();
     const nextMonth = next.getUTCMonth();
@@ -52,21 +54,21 @@ export function AvailabilityCalendar({ availability, updatedAt }: { availability
 
   return <div className="care-availability-calendar">
     <header>
-      <div><span>Available dates</span><h3>{monthLabel}</h3></div>
-      <nav aria-label="Change availability month"><button type="button" onClick={() => moveMonth(-1)} aria-label="Previous month"><ChevronLeft /></button><button type="button" onClick={() => moveMonth(1)} aria-label="Next month"><ChevronRight /></button></nav>
+      <div><span>Recurring hours by date</span><h3>{monthLabel}</h3></div>
+      <nav aria-label="Change availability month"><button type="button" disabled={atCurrentMonth} onClick={() => moveMonth(-1)} aria-label="Previous month"><ChevronLeft /></button><button type="button" onClick={() => moveMonth(1)} aria-label="Next month"><ChevronRight /></button></nav>
     </header>
     <div className="care-calendar-weekdays" aria-hidden="true">{["S", "M", "T", "W", "T", "F", "S"].map((day, index) => <span key={`${day}-${index}`}>{day}</span>)}</div>
-    <div className="care-calendar-grid" role="grid" aria-label={`${monthLabel} availability`}>
+    <div className="care-calendar-grid" role="group" aria-label={`${monthLabel} recurring schedule`}>
       {Array.from({ length: firstWeekday }, (_, index) => <span key={`empty-${index}`} />)}
       {Array.from({ length: daysInMonth }, (_, index) => {
         const day = index + 1;
         const key = keyFor(visibleMonth.year, visibleMonth.month, day);
         const recurringAvailable = availableWeekdays.has(dateFor(visibleMonth.year, visibleMonth.month, day).getUTCDay());
         const available = recurringAvailable && key >= todayKey;
-        return <button type="button" role="gridcell" key={key} disabled={!available} className={`${available ? "available" : ""} ${key === selectedDate ? "selected" : ""} ${key === todayKey ? "today" : ""}`} onClick={() => setSelectedDate(key)} aria-label={`${dayLabel(key)}${available ? ", available" : ", unavailable"}`} aria-selected={key === selectedDate}>{day}{available && <i />}</button>;
+        return <button type="button" key={key} disabled={!available} className={`${available ? "available" : ""} ${key === selectedDate ? "selected" : ""} ${key === todayKey ? "today" : ""}`} onClick={() => setSelectedDate(key)} aria-label={`${dayLabel(key)}${available ? ", recurring hours listed" : key < todayKey ? ", past date" : ", no recurring hours listed"}`} aria-pressed={key === selectedDate}>{day}{available && <i />}</button>;
       })}
     </div>
-    {selectedDate && selectedRules.length > 0 ? <div className="care-calendar-selection"><CheckCircle2 /><div><b>Available {dayLabel(selectedDate)}</b>{selectedRules.map((rule) => <span key={`${rule.start}-${rule.end}`}><Clock3 />{timeLabel(rule.start)} – {timeLabel(rule.end)}</span>)}</div></div> : <div className="care-calendar-selection empty"><Clock3 /><div><b>Select an available date</b><span>Choose a highlighted day to see this seller’s recurring hours.</span></div></div>}
-    <p>Availability is guidance only. The seller confirms the exact date and time before booking.</p>
+    {selectedDate && selectedRules.length > 0 ? <div className="care-calendar-selection" role="status"><CheckCircle2 /><div><b>Listed hours for {dayLabel(selectedDate)}</b>{selectedRules.map((rule) => <span key={`${rule.start}-${rule.end}`}><Clock3 />{timeLabel(rule.start)} – {timeLabel(rule.end)} · {rule.timezone || "America/Nassau"}</span>)}</div></div> : <div className="care-calendar-selection empty"><Clock3 /><div><b>No recurring hours listed for the remaining dates in this month</b><span>Try another month or ask the provider about your requested schedule.</span></div></div>}
+    <p>These are recurring hours, not live booking availability. Existing bookings, time off and date-specific changes are not reflected. Confirm the exact date and time with the provider before booking.</p>
   </div>;
 }

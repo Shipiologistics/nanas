@@ -1,5 +1,24 @@
 "use client";
 
+import { VerificationEvidence } from "./VerificationEvidence";
+import { ServiceCredentials } from "./ServiceCredentials";
+import { useVerificationQueue } from "./useVerificationQueue";
+import { ConversationHistory } from "./ConversationHistory";
+import { AdminFinance } from "./AdminFinance";
+import { AdminMessageAudit } from "./AdminMessageAudit";
+import { workerEvidence } from "../../lib/worker-evidence.mjs";
+import { moderationActionsForTarget, moderationError } from "../../lib/moderation.mjs";
+import { requestPostingKey } from "../../lib/request-posting.mjs";
+import { additionalIntakeServices, requestIntakeSelection } from "../../lib/intake-service-selection.mjs";
+import { providerEligibilityFeedback } from "../../lib/provider-eligibility-feedback.mjs";
+import { publicRequestCategories, publicDraftAreaId, publicDraftIslandId, validatePublicRequestDraft } from "../../lib/public-request-draft.mjs";
+import { WorkflowDialog } from "./WorkflowDialog";
+import { compareProviderRequests, parseProviderFeed } from "../../lib/provider-discovery.mjs";
+import { applyFavorite, checkFavoriteConfirmation, loadFavoriteIds } from "../../lib/favorites.mjs";
+import { isDiscoverableProvider, loadDirectoryRows } from "../../lib/provider-directory.mjs";
+import { requestScheduleSummary } from "../../lib/request-schedule.mjs";
+import type { Database } from "../../lib/database.types";
+
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
@@ -67,6 +86,7 @@ import {
   initialDemoState,
 } from "../../lib/demo-data";
 import { getSupabase, isSupabaseConfigured } from "../../lib/supabase";
+import { uploadedProfileImageCommitted } from "../../lib/provider-workspace.mjs";
 import {
   cloudinaryPublicImageUrl,
   deleteImage,
@@ -114,6 +134,7 @@ type Modal =
   | "catalog-area"
   | "posting-plan"
   | "household-member"
+  | "emergency-contact"
   | "weekly-availability"
   | "seller-service"
   | "seller-coverage"
@@ -160,6 +181,7 @@ type RequestDraft = {
   subcategoryCode: string;
   serviceId: string;
   recipientId: string;
+  emergencyContactId: string;
   recipientLabel: string;
   recipients: RequestRecipient[];
   needs: string[];
@@ -218,6 +240,17 @@ type RealtimeMessageRow = {
   created_at: string;
   deleted_at?: string | null;
 };
+type RealtimeNotificationRow = {
+  id: string; recipient_id: string; title: string; body: string | null;
+  read_at: string | null; archived_at?: string | null; created_at: string; deep_link: string | null;
+};
+type BookingReview = {
+  id: string; booking_id: string; author_id: string; subject_id: string;
+  overall_rating: number; body: string | null; status: string;
+};
+type PaymentRecord = { id: string; booking_id: string | null; request_id: string | null; processor: string; amount_minor: number; captured_minor: number; refunded_minor: number; currency: string; status: string; created_at: string };
+type WalletEntry = { id: string; booking_id: string | null; direction: string; amount_minor: number; created_at: string; ledger_accounts: { account_type: string; currency: string; owner_user_id: string | null } };
+type PayoutRecord = { id: string; amount_minor: number; currency: string; status: string; processor: string; created_at: string };
 type SellerServiceRow = {
   id: string;
   serviceId: string;
@@ -284,6 +317,9 @@ type AdminOpsState = {
     id: string;
     resourceType: string;
     purpose: string;
+    caseId?: string;
+    reason?: string;
+    messageCount?: number;
     fields: string[];
     createdAt: string;
   }[];
@@ -435,8 +471,9 @@ const careIntakeCategories: IntakeCategory[] = [
   {
     code: "senior_care",
     name: "Senior care",
-    description: "Companion, hands-on and live-in care",
+    description: "Senior support, respite, companion and live-in care",
     subcategories: [
+      ...additionalIntakeServices.senior_care,
       {
         code: "companion",
         name: "Companion",
@@ -479,9 +516,10 @@ const careIntakeCategories: IntakeCategory[] = [
   },
   {
     code: "adult_care",
-    name: "Adult care",
-    description: "Everyday disability and independent-living support",
+    name: "Home healthcare",
+    description: "Home nursing, recovery, therapy and everyday adult support",
     subcategories: [
+      ...additionalIntakeServices.adult_care,
       {
         code: "companion",
         name: "Companion",
@@ -689,7 +727,7 @@ const defaultPostingPlans: PostingPlan[] = [
     id: "demo-plan-free",
     code: "free",
     name: "Free care request",
-    description: "Your first request, visible to matching approved sellers.",
+    description: "Your first request, visible to matching approved providers.",
     fee: 0,
     durationDays: 7,
     freePostAllowance: 1,
@@ -830,12 +868,12 @@ const emptyAdminOps = (): AdminOpsState => ({
   accessLogs: [],
   outbox: [],
   deliveries: [],
-  categories: [{ id: "demo-healthcare", name: "Healthcare at home" }],
+  categories: [{ id: "demo-care-household", name: "Care and household services" }],
   services: serviceOptions.map((name) => ({
     id: serviceId(name),
     categoryId: "demo-healthcare",
     name,
-    description: `${name} delivered safely in the home by an approved seller.`,
+    description: `${name} delivered safely in the home by an approved provider.`,
     pricingUnit: "hour",
     riskLevel: name === "Home nursing" ? "enhanced" : "standard",
     active: true,
@@ -857,10 +895,12 @@ export default function NanasPortal({
   initialRoute,
   initialRequestCategory,
   initialDemoMode,
+  allowConnectedSimulation = false,
 }: {
   initialRoute: string[];
   initialRequestCategory?: string;
   initialDemoMode: boolean;
+  allowConnectedSimulation?: boolean;
 }) {
   const router = useRouter();
   const routeRole = (["buyer", "seller", "admin"] as DemoRole[]).includes(
@@ -868,9 +908,9 @@ export default function NanasPortal({
   )
     ? (initialRoute[0] as DemoRole)
     : "buyer";
-  const routeEntityId = initialRoute[2]
+  const [routeEntityId, setRouteEntityId] = useState(initialRoute[2]
     ? decodeURIComponent(initialRoute[2])
-    : null;
+    : null);
   const initialIntakeCategory =
     routeRole === "buyer"
       ? careIntakeCategories.find(
@@ -889,15 +929,23 @@ export default function NanasPortal({
             ? "Student"
             : "A family member";
   const [role, setRole] = useState<DemoRole>(routeRole);
-  const [section, setSection] = useState(initialRoute[1] ?? "overview");
-  const [state, setState] = useState<DemoState>(cloneInitial);
+  const [section, setSectionState] = useState(initialRoute[1] ?? "overview");
+  const [state, setState] = useState<DemoState>(() => initialDemoMode ? cloneInitial() : {
+    users: [], requests: [], bookings: [], messages: [], kyc: [], disputes: [], favorites: [],
+    supportCases: [], safetyIncidents: [], privacyRequests: [], moderationReports: [], notifications: [], sessionCodes: {}, payouts: [],
+  });
   const [modal, setModal] = useState<Modal>(
     initialIntakeCategory ? "request" : null,
   );
+  const [bookingReviews, setBookingReviews] = useState<BookingReview[]>([]);
+  const [financeRecords, setFinanceRecords] = useState<{ loaded: boolean; error: string | null; balance: number; accountStatus: string; payments: PaymentRecord[]; entries: WalletEntry[]; payouts: PayoutRecord[] }>({ loaded: false, error: null, balance: 0, accountStatus: "", payments: [], entries: [], payouts: [] });
+  const reviewSubmitting = useRef(false);
   const [selected, setSelected] = useState<string | null>(routeEntityId);
   const [unlockedConversations, setUnlockedConversations] = useState<string[]>(
     [],
   );
+  const [messageAccessHydrated, setMessageAccessHydrated] = useState(false);
+  const [preferencesHydrated, setPreferencesHydrated] = useState(false);
   const [notificationPreferences, setNotificationPreferences] = useState<
     Record<string, Record<string, boolean>>
   >({});
@@ -905,6 +953,10 @@ export default function NanasPortal({
     "support" | "safety" | null
   >(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [toastIsError, setToastIsError] = useState(false);
+  const toastTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (toastTimer.current !== null) window.clearTimeout(toastTimer.current); }, []);
+  const [savingNotificationPreference, setSavingNotificationPreference] = useState(false);
   const [busy, setBusy] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [discoveryQuery, setDiscoveryQuery] = useState("");
@@ -926,9 +978,17 @@ export default function NanasPortal({
   const [discoveryLanguageQuery, setDiscoveryLanguageQuery] = useState("");
   const [discoveryAdvancedOpen, setDiscoveryAdvancedOpen] = useState(false);
   const [sellerJobQuery, setSellerJobQuery] = useState("");
+  const [favoritePending, setFavoritePending] = useState<string[]>([]);
+  const favoriteWrites = useRef(new Set<string>());
+  const favoriteRevision = useRef(0);
+  const [favoritesLoaded, setFavoritesLoaded] = useState(initialDemoMode);
+  const [favoritesLoadError, setFavoritesLoadError] = useState<string | null>(null);
   const [sellerJobService, setSellerJobService] = useState("all");
   const [sellerJobArea, setSellerJobArea] = useState("all");
-  const [sellerJobSort, setSellerJobSort] = useState("newest");
+  const [sellerJobSort, setSellerJobSort] = useState("recommended");
+  const [sellerJobPage, setSellerJobPage] = useState(0);
+  const [providerFeed, setProviderFeed] = useState<{ requests: DemoRequest[]; total: number; key: string } | null>(null);
+  const [providerFeedError, setProviderFeedError] = useState<string | null>(null);
   const [focusedSellerId, setFocusedSellerId] = useState<string | null>(null);
   const [requestStep, setRequestStep] = useState(
     initialIntakeCategory ? 1 : 0,
@@ -940,6 +1000,7 @@ export default function NanasPortal({
       initialIntakeSubcategory?.serviceId ??
       "23000000-0000-0000-0000-000000000001",
     recipientId: "",
+    emergencyContactId: "",
     recipientLabel: initialRecipientLabel,
     needs: [],
     qualities: [],
@@ -1003,6 +1064,7 @@ export default function NanasPortal({
     postingPlanCode: "free",
   }));
   const [adminOps, setAdminOps] = useState<AdminOpsState>(emptyAdminOps);
+  const [workerRecordsState, setWorkerRecordsState] = useState<"loading" | "loaded" | "error">("loading");
   const [liveServices, setLiveServices] = useState(() =>
     serviceOptions.map((name) => ({ id: serviceId(name), name })),
   );
@@ -1026,10 +1088,23 @@ export default function NanasPortal({
       active: boolean;
     }[]
   >([]);
+  const [emergencyContacts, setEmergencyContacts] = useState<{
+    id: string; name: string; phone: string; relationship: string; priority: number; consentConfirmed: boolean;
+  }[]>([]);
+  const [bookingEmergencyContact, setBookingEmergencyContact] = useState<{
+    bookingId: string; configured: boolean; accessLogId?: string;
+    contact?: { id: string; name: string; phone: string; relationship: string };
+  } | null>(null);
+  const [bookingEmergencyLoading, setBookingEmergencyLoading] = useState(false);
+  const [visitUpdateTimeline, setVisitUpdateTimeline] = useState<{
+    bookingId: string;
+    updates: { id: string; providerId: string; updateType: string; note: string; occurredAt: string }[];
+  } | null>(null);
+  const [visitUpdateLoading, setVisitUpdateLoading] = useState(false);
   const [sellerServiceRows, setSellerServiceRows] = useState<
     SellerServiceRow[]
   >(() =>
-    demoSellerDetails.services.map((service) => ({
+    (initialDemoMode ? demoSellerDetails.services : []).map((service) => ({
       id: `demo-${service.id}`,
       serviceId: service.id,
       name: service.name,
@@ -1051,7 +1126,7 @@ export default function NanasPortal({
       active: boolean;
     }[]
   >(() =>
-    (demoSellerDetails.availability ?? []).map((rule, index) => ({
+    (initialDemoMode ? demoSellerDetails.availability ?? [] : []).map((rule, index) => ({
       id: `demo-rule-${index}`,
       weekday: rule.weekday,
       start: rule.start,
@@ -1061,14 +1136,39 @@ export default function NanasPortal({
   );
   const [sellerProfileForm, setSellerProfileForm] =
     useState<SellerProfileDraft>({
-      displayName: demoSellerSeed.name,
-      headline: demoSellerDetails.headline ?? "",
-      languages: demoSellerDetails.languages,
-      vaccinations: demoSellerDetails.vaccinations ?? [],
-      additionalDetails: demoSellerDetails.additionalDetails ?? [],
-      islandId: "10000000-0000-0000-0000-000000000001",
-      locality: demoSellerDetails.locality ?? "",
+      displayName: initialDemoMode ? demoSellerSeed.name : "",
+      headline: initialDemoMode ? demoSellerDetails.headline ?? "" : "",
+      languages: initialDemoMode ? demoSellerDetails.languages : [],
+      vaccinations: initialDemoMode ? demoSellerDetails.vaccinations ?? [] : [],
+      additionalDetails: initialDemoMode ? demoSellerDetails.additionalDetails ?? [] : [],
+      islandId: initialDemoMode ? "10000000-0000-0000-0000-000000000001" : undefined,
+      locality: initialDemoMode ? demoSellerDetails.locality ?? "" : "",
     });
+  const [sellerApprovalStatus, setSellerApprovalStatus] = useState<string>(initialDemoMode ? "approved" : "loading");
+  const [sellerPublishedAt, setSellerPublishedAt] = useState<string | null>(initialDemoMode ? "demo" : null);
+  const [workspaceRevision, setWorkspaceRevision] = useState(0);
+  const [simulationAllowed, setSimulationAllowed] = useState(false);
+  const [conversationAccess, setConversationAccess] = useState<Record<string, { locked: boolean; can_send: boolean; unread_count: number; last_read_at: string | null; other_last_read_at: string | null }>>({});
+  const messageSending = useRef(false);
+  const requestPostingPending = useRef(false);
+  const bookingTransitionPending = useRef(false);
+  const visitCodePending = useRef(false);
+  const disputePending = useRef(false);
+  const moderationPending = useRef(false);
+  const cancellationPending = useRef(false);
+  const cancellationPreviewRequest = useRef(0);
+  const [cancellationEstimate, setCancellationEstimate] = useState<{
+    bookingId: string; currency: string; capturedMinor: number; feeMinor: number; refundMinor: number; feePercent: number;
+  } | null>(null);
+  const [cancellationLoading, setCancellationLoading] = useState(false);
+  const [cancellationError, setCancellationError] = useState<string | null>(null);
+  const messageAttempt = useRef<{ conversationId: string; body: string; nonce: string } | null>(null);
+  const previousConversationLocks = useRef<Record<string, boolean>>({});
+  const [eligibilityNow, setEligibilityNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setEligibilityNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const [sellerCoverageRows, setSellerCoverageRows] = useState<
     {
       id: string;
@@ -1087,11 +1187,69 @@ export default function NanasPortal({
     avatar: string;
   } | null>(null);
   const [marketplaceLoaded, setMarketplaceLoaded] = useState(initialDemoMode);
+  const [directoryLoadError, setDirectoryLoadError] = useState(false);
   const [sellerWorkspaceLoaded, setSellerWorkspaceLoaded] =
     useState(initialDemoMode);
   const demoMode = initialDemoMode;
+  useEffect(() => {
+    if (routeRole !== "buyer" || new URLSearchParams(window.location.search).get("resumeRequest") !== "1") return;
+    try {
+      const raw = sessionStorage.getItem("nanas-care-request-draft");
+      if (!raw) return;
+      const saved = validatePublicRequestDraft(JSON.parse(raw), bahamasInputValue(Date.now()).slice(0,10));
+      const category = careIntakeCategories.find((item) => item.code === publicRequestCategories[saved.service as keyof typeof publicRequestCategories]);
+      if (!category) return;
+      const subcategory = category.subcategories.find(item => item.serviceId === saved.serviceId);
+      queueMicrotask(() => {
+        setRequestDraft((draft) => ({ ...draft, categoryCode: category.code, subcategoryCode: subcategory?.code ?? "", serviceId: subcategory?.serviceId ?? "",
+          startsAt: `${saved.date}T${saved.time}`, startTime: saved.time, endTime: saved.endTime, useSpecificTimes: true, hours: saved.hours, budget: saved.budget,
+          minRate: Math.min(20, Math.round(saved.budget / saved.hours * 100) / 100), maxRate: Math.round(saved.budget / saved.hours * 100) / 100,
+          recipientId: "", recipientLabel: saved.recipient, recipients: [{id:"public-draft-recipient",label:saved.recipient,relationship:category.code === "child_care" ? "child" : "family_member",birthMonth:"",birthYear:"",expecting:false}],
+          summary: saved.description, areaId: publicDraftAreaId(saved.area), islandId: publicDraftIslandId(saved.area), locality: saved.area, scheduleKind: "one_time",
+        }));
+        setToast(`Draft restored: ${saved.hours} hours, BSD ${saved.budget} total budget (up to BSD ${(saved.budget / saved.hours).toFixed(2)}/hour). Confirm the service and coverage before posting.`);
+        setRequestStep(1); setModal("request");
+      });
+    } catch (error) { queueMicrotask(() => setToast(error instanceof Error ? error.message : "Your saved draft could not be restored. Start a new request.")); }
+  }, [routeRole]);
+  const [workspaceHydrated, setWorkspaceHydrated] = useState(false);
+  useEffect(() => {
+    if (!demoMode) return;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("reset") === "1") localStorage.removeItem("nanas-demo-workspace-v1");
+      const raw = localStorage.getItem("nanas-demo-workspace-v1");
+      const saved = raw ? JSON.parse(raw) as { householdMembers?: typeof householdMembers; sellerServiceRows?: typeof sellerServiceRows; availabilityRows?: typeof availabilityRows; sellerProfileForm?: SellerProfileDraft; sellerCoverageRows?: typeof sellerCoverageRows; sellerPublishedAt?: string | null } : null;
+      queueMicrotask(() => {
+        if (saved?.householdMembers) setHouseholdMembers(saved.householdMembers);
+        if (saved?.sellerServiceRows) setSellerServiceRows(saved.sellerServiceRows);
+        if (saved?.availabilityRows) setAvailabilityRows(saved.availabilityRows);
+        if (saved?.sellerProfileForm) setSellerProfileForm(saved.sellerProfileForm);
+        if (saved?.sellerCoverageRows) setSellerCoverageRows(saved.sellerCoverageRows);
+        if (saved && Object.prototype.hasOwnProperty.call(saved, "sellerPublishedAt")) setSellerPublishedAt(saved.sellerPublishedAt ?? null);
+        setWorkspaceHydrated(true);
+      });
+    } catch { queueMicrotask(() => setWorkspaceHydrated(true)); }
+  }, [demoMode]);
+  useEffect(() => {
+    if (!demoMode || !workspaceHydrated) return;
+    try { localStorage.setItem("nanas-demo-workspace-v1", JSON.stringify({ householdMembers, sellerServiceRows, availabilityRows, sellerProfileForm, sellerCoverageRows, sellerPublishedAt })); } catch { /* Keep the current session usable when storage is unavailable. */ }
+  }, [demoMode, workspaceHydrated, householdMembers, sellerServiceRows, availabilityRows, sellerProfileForm, sellerCoverageRows, sellerPublishedAt]);
   const stateHydrated = useRef(false);
+  const [demoStateHydrated, setDemoStateHydrated] = useState(!initialDemoMode);
   const adminOpsHydrated = useRef(false);
+  useEffect(() => {
+    if (!demoMode) return;
+    const sync = (event: StorageEvent) => {
+      if (!event.newValue) return;
+      try {
+        if (event.key === "nanas-demo-state-v3") setState(JSON.parse(event.newValue));
+        if (event.key === "nanas-demo-admin-ops-v1") setAdminOps(JSON.parse(event.newValue));
+      } catch { /* Ignore invalid data from another local tab. */ }
+    };
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
+  }, [demoMode]);
   const backendConnected = isSupabaseConfigured() && !demoMode;
   const currentUserId = demoMode
     ? demoIdentity[role]
@@ -1105,7 +1263,72 @@ export default function NanasPortal({
     avatar: !demoMode && authIdentity?.avatar ? authIdentity.avatar : "NM",
   };
 
+  const discoveryDetailId = section === "requests" ? routeEntityId : undefined;
   useEffect(() => {
+    if (!backendConnected || role !== "buyer" || !authIdentity?.id || favoriteWrites.current.size) return;
+    const supabase = getSupabase();
+    if (!supabase) return;
+    let cancelled = false;
+    const revision = ++favoriteRevision.current;
+    void (async () => {
+      setFavoritesLoaded(false);
+      setFavoritesLoadError(null);
+      try {
+        const ids = await loadFavoriteIds(async (cursor: string | null) => {
+          let query = supabase.from("favorites").select("seller_id").eq("buyer_id", authIdentity.id).order("seller_id").limit(500);
+          if (cursor) query = query.gt("seller_id", cursor);
+          return await query;
+        });
+        if (!cancelled && favoriteRevision.current === revision) {
+          setState(previous => ({ ...previous, favorites: ids }));
+          setFavoritesLoaded(true);
+        }
+      } catch {
+        if (!cancelled && favoriteRevision.current === revision) {
+          setFavoritesLoadError("Saved providers could not be loaded. Refresh before making changes.");
+          setFavoritesLoaded(true);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [backendConnected, role, authIdentity?.id, workspaceRevision, favoritePending.length]);
+  const providerFeedKey = JSON.stringify([currentUserId, sellerJobSort, sellerJobQuery, sellerJobService, sellerJobArea, sellerJobPage, discoveryDetailId, workspaceRevision, eligibilityNow]);
+  const providerFeedReady = providerFeed?.key === providerFeedKey;
+  useEffect(() => {
+    if (!backendConnected || role !== "seller" || !authIdentity?.id) return;
+    const supabase = getSupabase();
+    if (!supabase) return;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setProviderFeedError(null);
+      try {
+        const { data, error } = await supabase.rpc("provider_request_feed", {
+          p_sort: sellerJobSort, p_query: discoveryDetailId ? "" : sellerJobQuery,
+          p_service: discoveryDetailId ? "all" : sellerJobService,
+          p_area: discoveryDetailId ? "all" : sellerJobArea, p_page: discoveryDetailId ? 0 : sellerJobPage,
+          p_page_size: 20, ...(discoveryDetailId ? { p_request_id: discoveryDetailId } : {}),
+        });
+        if (error) throw error;
+        const feed = parseProviderFeed(data) as { total: number; items: { id: string; buyer_id: string; service: string; area: string; mode: "scheduled" | "on_demand"; desired_start: string; desired_end: string; created_at: string; published_until: string | null; featured: boolean; has_quoted: boolean; quote_count: number; care_summary: string; budget_minor: number | null; status: "requested" | "offered"; schedule: { kind: "recurring" | "one_time"; start_date: string; end_date: string | null; flexible_start: boolean; weekdays: number[]; time_periods: string[]; specific_start: string | null; specific_end: string | null; schedule_may_vary: boolean; timezone: string } }[] };
+        if (cancelled) return;
+        const lastPage = Math.max(0, Math.ceil(feed.total / 20) - 1);
+        if (!discoveryDetailId && sellerJobPage > lastPage) { setSellerJobPage(lastPage); return; }
+        setProviderFeed({ key: providerFeedKey, total: feed.total, requests: feed.items.map(row => ({
+          id: row.id, buyerId: row.buyer_id, buyerName: "Nanas buyer", service: row.service, area: row.area,
+          mode: row.mode, startsAt: row.desired_start, endsAt: row.desired_end, createdAt: row.created_at,
+          schedule: { kind: row.schedule.kind, startDate: row.schedule.start_date, endDate: row.schedule.end_date, flexibleStart: row.schedule.flexible_start, weekdays: row.schedule.weekdays, timePeriods: row.schedule.time_periods, specificStart: row.schedule.specific_start, specificEnd: row.schedule.specific_end, scheduleMayVary: row.schedule.schedule_may_vary, timezone: row.schedule.timezone },
+          publishedUntil: row.published_until, featured: row.featured, quoteCount: row.quote_count, hasQuoted: row.has_quoted,
+          summary: row.care_summary, budget: Number(row.budget_minor ?? 0) / 100, status: row.status, quotes: [],
+        })) });
+      } catch {
+        if (!cancelled) { setProviderFeed(null); setProviderFeedError("Matching requests could not be verified. Please refresh and try again."); }
+      }
+    }, 250);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [backendConnected, role, authIdentity?.id, providerFeedKey, sellerJobSort, sellerJobQuery, sellerJobService, sellerJobArea, sellerJobPage, discoveryDetailId]);
+
+  useEffect(() => {
+    if (!demoMode) return;
     try {
       const saved = localStorage.getItem("nanas-message-access-v1");
       if (saved)
@@ -1115,16 +1338,19 @@ export default function NanasPortal({
     } catch {
       // An unavailable localStorage simply keeps conversations locked.
     }
-  }, []);
+    queueMicrotask(() => setMessageAccessHydrated(true));
+  }, [demoMode]);
 
   useEffect(() => {
-    localStorage.setItem(
+    if (!demoMode || !messageAccessHydrated) return;
+    try { localStorage.setItem(
       "nanas-message-access-v1",
       JSON.stringify(unlockedConversations),
-    );
-  }, [unlockedConversations]);
+    ); } catch { /* Access remains session-only when storage is unavailable. */ }
+  }, [unlockedConversations, demoMode, messageAccessHydrated]);
 
   useEffect(() => {
+    if (!demoMode) return;
     try {
       const saved = localStorage.getItem("nanas-notification-preferences-v1");
       if (saved)
@@ -1136,21 +1362,53 @@ export default function NanasPortal({
     } catch {
       // Defaults remain enabled if preference storage is unavailable.
     }
-  }, []);
+    queueMicrotask(() => setPreferencesHydrated(true));
+  }, [demoMode]);
 
   useEffect(() => {
-    localStorage.setItem(
+    if (!demoMode || !preferencesHydrated) return;
+    try { localStorage.setItem(
       "nanas-notification-preferences-v1",
       JSON.stringify(notificationPreferences),
-    );
-  }, [notificationPreferences]);
+    ); } catch { /* Preferences remain available in the current session. */ }
+  }, [notificationPreferences, preferencesHydrated, demoMode]);
 
   useEffect(() => {
+    if (!backendConnected || !authIdentity?.id) return;
+    const supabase = getSupabase();
+    if (!supabase) return;
+    let cancelled = false;
+    const userId = authIdentity.id;
+    void (async () => {
+      const { data, error } = await supabase.from("notification_preferences")
+        .select("event_category,in_app,email").eq("user_id", userId);
+      if (cancelled) return;
+      if (error) {
+        setToast("Notification preferences could not be loaded. Reload to try again.");
+        return;
+      }
+      const labels: Record<string, string> = {
+        booking: "Booking updates", messages: "Messages", payments: "Payment receipts", account: "Credential reminders",
+      };
+      const preferences: Record<string, boolean> = {};
+      for (const item of data ?? []) {
+        if (labels[item.event_category]) preferences[labels[item.event_category]] = item.in_app && item.email;
+      }
+      setNotificationPreferences((previous) => ({ ...previous, [userId]: preferences }));
+      setPreferencesHydrated(true);
+    })();
+    return () => { cancelled = true; };
+  }, [backendConnected, authIdentity?.id]);
+
+  useEffect(() => {
+    if (!demoMode) return;
     const params = new URLSearchParams(window.location.search);
     if (params.get("demo") === "1" && params.get("reset") === "1") {
       localStorage.removeItem("nanas-demo-state-v3");
       localStorage.removeItem("nanas-demo-admin-ops-v1");
+      localStorage.removeItem("nanas-demo-visit-updates-v1");
       stateHydrated.current = true;
+      setDemoStateHydrated(true);
       return;
     }
     const saved = localStorage.getItem("nanas-demo-state-v3");
@@ -1162,9 +1420,23 @@ export default function NanasPortal({
           ...parsed,
           moderationReports: parsed.moderationReports ?? [],
         } as DemoState;
+        restored.users = restored.users.map((user) =>
+          user.sellerDetails
+            ? {
+                ...user,
+                sellerDetails: {
+                  ...user.sellerDetails,
+                  badges: (user.sellerDetails.badges ?? []).map((badge) =>
+                    badge === "Top care seller" ? "Top care provider" : badge,
+                  ),
+                },
+              }
+            : user,
+        );
         queueMicrotask(() => {
           setState(restored);
           stateHydrated.current = true;
+          setDemoStateHydrated(true);
         });
         return;
       } catch {
@@ -1172,12 +1444,14 @@ export default function NanasPortal({
       }
     }
     stateHydrated.current = true;
-  }, []);
+    setDemoStateHydrated(true);
+  }, [demoMode]);
   useEffect(() => {
-    if (stateHydrated.current)
+    if (demoMode && stateHydrated.current)
       localStorage.setItem("nanas-demo-state-v3", JSON.stringify(state));
-  }, [state]);
+  }, [state, demoMode]);
   useEffect(() => {
+    if (!demoMode) return;
     const params = new URLSearchParams(window.location.search);
     if (params.get("demo") === "1" && params.get("reset") === "1") {
       adminOpsHydrated.current = true;
@@ -1198,11 +1472,11 @@ export default function NanasPortal({
       }
     }
     adminOpsHydrated.current = true;
-  }, []);
+  }, [demoMode]);
   useEffect(() => {
-    if (adminOpsHydrated.current)
+    if (demoMode && adminOpsHydrated.current)
       localStorage.setItem("nanas-demo-admin-ops-v1", JSON.stringify(adminOps));
-  }, [adminOps]);
+  }, [adminOps, demoMode]);
   useEffect(() => {
     if (!backendConnected) {
       return;
@@ -1215,6 +1489,10 @@ export default function NanasPortal({
         setMarketplaceLoaded(true);
         setSellerWorkspaceLoaded(true);
         return;
+      }
+      if (allowConnectedSimulation) {
+        const capability = await supabase.rpc("payment_simulation_allowed");
+        setSimulationAllowed(!capability.error && capability.data === true);
       }
       const [{ data: profile }, { data: roles }] = await Promise.all([
         supabase
@@ -1290,7 +1568,7 @@ export default function NanasPortal({
             .is("revoked_at", null),
           supabase
             .from("verification_cases")
-            .select("id,seller_id,verification_type,status,created_at"),
+            .select("id,seller_id,verification_type,status,created_at,decision_reason"),
           supabase
             .from("service_disputes")
             .select(
@@ -1344,7 +1622,8 @@ export default function NanasPortal({
         const hydratedKyc = (remoteKyc ?? []).map((item) => ({
           id: item.id,
           sellerId: item.seller_id,
-          sellerName: profileNames.get(item.seller_id) ?? "Nanas seller",
+          sellerName: profileNames.get(item.seller_id) ?? "Nanas provider",
+          decisionReason: item.decision_reason ?? undefined,
           type: item.verification_type,
           status:
             item.status === "approved" ||
@@ -1364,6 +1643,8 @@ export default function NanasPortal({
           status:
             item.status === "resolved" || item.status === "closed"
               ? ("resolved" as const)
+              : item.status === "escalated"
+                ? ("escalated" as const)
               : ("open" as const),
           resolution: item.resolution_note ?? item.resolution_code ?? undefined,
         }));
@@ -1390,6 +1671,7 @@ export default function NanasPortal({
           disputes: hydratedDisputes,
           moderationReports: hydratedModeration,
         }));
+        setWorkerRecordsState("loading");
         const [
           overviewResult,
           flagsResult,
@@ -1444,7 +1726,7 @@ export default function NanasPortal({
             .limit(50),
           supabase
             .from("admin_access_logs")
-            .select("id,resource_type,purpose_code,fields_accessed,created_at")
+            .select("*")
             .order("created_at", { ascending: false })
             .limit(50),
           supabase
@@ -1479,6 +1761,7 @@ export default function NanasPortal({
             )
             .order("sort_order"),
         ]);
+        setWorkerRecordsState(workersResult.error || runsResult.error ? "error" : "loaded");
         const adminOperationErrors = [
           overviewResult,
           flagsResult,
@@ -1559,6 +1842,9 @@ export default function NanasPortal({
             id: item.id,
             resourceType: item.resource_type,
             purpose: item.purpose_code,
+            caseId: item.case_id ?? undefined,
+            reason: item.access_reason ?? undefined,
+            messageCount: item.message_count ?? undefined,
             fields: item.fields_accessed,
             createdAt: item.created_at,
           })),
@@ -1624,11 +1910,11 @@ export default function NanasPortal({
           areasResult,
           sellersResult,
           requestsResult,
+          schedulesResult,
           quotesResult,
           bookingsResult,
           conversationsResult,
           messagesResult,
-          favoritesResult,
           notificationsResult,
           supportResult,
           safetyResult,
@@ -1636,25 +1922,37 @@ export default function NanasPortal({
           reviewsResult,
           verificationResult,
           householdMembersResult,
+          emergencyContactsResult,
           sellerServicesOwnResult,
           availabilityOwnResult,
           sellerProfileOwnResult,
           sellerCoverageOwnResult,
           postingPlansBuyerResult,
+          walletResult,
+          paymentsOwnResult,
+          ledgerOwnResult,
+          payoutsOwnResult,
+          disputesResult,
+          refundsResult,
+          cancellationsResult,
         ] = await Promise.all([
           supabase.from("services").select("id,name").eq("active", true),
           supabase.from("service_areas").select("id,name").eq("active", true),
-          supabase
-            .from("seller_directory")
-            .select(
-              "user_id,display_name,avatar_path,headline,locality,island,rating_average,rating_count,completed_bookings,response_rate,languages,vaccinations,additional_details,services,badges,availability,availability_updated_at,credentials,safety_checks",
-            ),
+          loadDirectoryRows(async (cursor: string | null) => {
+            let query = supabase.from("seller_directory").select("*").order("user_id").limit(250);
+            if (cursor) query = query.gt("user_id", cursor);
+            return await query;
+          }).then(data => ({data:data as Database["public"]["Views"]["seller_directory"]["Row"][],error:null})).catch(error => ({data:[],error})),
           supabase
             .from("booking_requests")
             .select(
-              "id,buyer_id,service_id,service_area_id,mode,desired_start,desired_end,care_summary,budget_minor,status,created_at",
+              "id,buyer_id,service_id,service_area_id,mode,desired_start,desired_end,care_summary,budget_minor,status,created_at,published_until",
             )
             .order("created_at", { ascending: false })
+            .limit(200),
+          supabase
+            .from("booking_request_schedules")
+            .select("request_id,schedule_kind,start_date,end_date,flexible_start,weekdays,time_periods,specific_start,specific_end,schedule_may_vary,timezone")
             .limit(200),
           supabase
             .from("booking_quotes")
@@ -1666,7 +1964,7 @@ export default function NanasPortal({
           supabase
             .from("bookings")
             .select(
-              "id,reference,request_id,quote_id,buyer_id,seller_id,service_id,scheduled_start,scheduled_end,status,total_minor,seller_net_minor,created_at",
+              "id,reference,request_id,quote_id,buyer_id,seller_id,service_id,scheduled_start,scheduled_end,status,completed_at,total_minor,seller_net_minor,created_at",
             )
             .order("created_at", { ascending: false })
             .limit(200),
@@ -1679,15 +1977,13 @@ export default function NanasPortal({
             .from("messages")
             .select("id,conversation_id,sender_id,body,created_at")
             .is("deleted_at", null)
-            .order("created_at", { ascending: true })
+            .order("created_at", { ascending: false })
+            .order("id", { ascending: false })
             .limit(500),
           supabase
-            .from("favorites")
-            .select("seller_id")
-            .eq("buyer_id", authData.user.id),
-          supabase
             .from("notifications")
-            .select("id,recipient_id,title,body,read_at,created_at")
+            .select("id,recipient_id,title,body,read_at,created_at,deep_link")
+            .is("archived_at", null)
             .order("created_at", { ascending: false })
             .limit(200),
           supabase
@@ -1709,12 +2005,13 @@ export default function NanasPortal({
             .limit(200),
           supabase
             .from("reviews")
-            .select("booking_id,author_id")
+            .select("id,booking_id,author_id,subject_id,overall_rating,body,status")
+            .or(`author_id.eq.${authData.user.id},subject_id.eq.${authData.user.id}`)
             .order("created_at", { ascending: false })
             .limit(300),
           supabase
             .from("verification_cases")
-            .select("id,seller_id,verification_type,status,created_at")
+            .select("id,seller_id,verification_type,status,created_at,decision_reason")
             .order("created_at", { ascending: false })
             .limit(200),
           supabase
@@ -1722,6 +2019,12 @@ export default function NanasPortal({
             .select(
               "id,relationship,display_name,date_of_birth_private,care_notes_private,active",
             )
+            .order("created_at"),
+          supabase
+            .from("emergency_contacts")
+            .select("id,name,phone_e164,relationship,priority,consent_confirmed_at")
+            .eq("user_id", authData.user.id)
+            .order("priority")
             .order("created_at"),
           supabase
             .from("seller_services")
@@ -1740,7 +2043,7 @@ export default function NanasPortal({
           supabase
             .from("seller_profiles")
             .select(
-              "display_name,avatar_path,headline,languages,island_id,locality,vaccinations,additional_details",
+              "display_name,avatar_path,headline,languages,island_id,locality,vaccinations,additional_details,status,profile_published_at",
             )
             .eq("user_id", authData.user.id)
             .maybeSingle(),
@@ -1756,7 +2059,17 @@ export default function NanasPortal({
             )
             .eq("active", true)
             .order("sort_order"),
+          supabase.from("wallet_balances").select("balance_minor,status,currency").eq("owner_user_id", authData.user.id).eq("account_type", detectedRole === "seller" ? "seller_wallet" : "buyer_wallet").eq("currency", "BSD").maybeSingle(),
+          supabase.from("payment_intents").select("id,booking_id,request_id,processor,amount_minor,captured_minor,refunded_minor,currency,status,created_at").eq("payer_id", authData.user.id).order("created_at", { ascending: false }).limit(100),
+          supabase.from("ledger_entries").select("id,booking_id,direction,amount_minor,created_at,ledger_accounts!inner(account_type,currency,owner_user_id)").eq("ledger_accounts.owner_user_id", authData.user.id).eq("ledger_accounts.account_type", detectedRole === "seller" ? "seller_wallet" : "buyer_wallet").order("created_at", { ascending: false }).limit(100),
+          supabase.from("payouts").select("id,amount_minor,currency,status,processor,created_at").eq("seller_id", authData.user.id).order("created_at", { ascending: false }).limit(100),
+          supabase.from("service_disputes").select("id,booking_id,opened_by,reason_code,summary,status,resolution_code,resolution_note").order("created_at", { ascending: false }).limit(300),
+          supabase.from("refunds").select("booking_id,amount_minor,status").eq("status", "refunded"),
+          supabase.from("cancellations").select("booking_id,fee_minor,refund_minor"),
         ]);
+
+        const financeError = walletResult.error ?? paymentsOwnResult.error ?? ledgerOwnResult.error ?? payoutsOwnResult.error;
+        setFinanceRecords({ loaded: true, error: financeError ? "Financial records could not be loaded. Please refresh to retry." : null, balance: Number(walletResult.data?.balance_minor ?? 0) / 100, accountStatus: walletResult.data?.status ?? "active", payments: paymentsOwnResult.data ?? [], entries: ledgerOwnResult.data ?? [], payouts: payoutsOwnResult.data ?? [] });
 
         const serviceNames = new Map(
           (servicesResult.data ?? []).map((item) => [item.id, item.name]),
@@ -1786,11 +2099,21 @@ export default function NanasPortal({
             active: item.active,
           })),
         );
+        setEmergencyContacts(
+          (emergencyContactsResult.data ?? []).map((item) => ({
+            id: item.id,
+            name: item.name,
+            phone: item.phone_e164,
+            relationship: item.relationship,
+            priority: item.priority,
+            consentConfirmed: item.consent_confirmed_at !== null,
+          })),
+        );
         setSellerServiceRows(
           (sellerServicesOwnResult.data ?? []).map((item) => ({
             id: item.id,
             serviceId: item.service_id,
-            name: serviceNames.get(item.service_id) ?? "Healthcare service",
+            name: serviceNames.get(item.service_id) ?? "Unavailable care service",
             rate: Number(item.rate_minor) / 100,
             rateMax:
               item.rate_max_minor == null
@@ -1812,6 +2135,8 @@ export default function NanasPortal({
             active: item.active,
           })),
         );
+        setSellerApprovalStatus(sellerProfileOwnResult.data?.status ?? "draft");
+        setSellerPublishedAt(sellerProfileOwnResult.data?.profile_published_at ?? null);
         if (sellerProfileOwnResult.data)
           setSellerProfileForm({
             displayName: sellerProfileOwnResult.data.display_name,
@@ -1838,7 +2163,7 @@ export default function NanasPortal({
           (sellerCoverageOwnResult.data ?? []).map((item) => ({
             id: item.id,
             areaId: item.service_area_id,
-            name: areaNames.get(item.service_area_id) ?? "The Bahamas",
+            name: areaNames.get(item.service_area_id) ?? "Unavailable service area",
             radius: Number(item.radius_km ?? 0),
             travelFee: Number(item.travel_fee_minor) / 100,
             active: item.active,
@@ -1860,10 +2185,13 @@ export default function NanasPortal({
             })),
           }));
         const remoteRequests = requestsResult.data ?? [];
+        const schedulesByRequest = new Map((schedulesResult.data ?? []).map((schedule) => [schedule.request_id, schedule]));
+        setDirectoryLoadError(Boolean(sellersResult.error));
         const remoteQuotes = quotesResult.data ?? [];
         const remoteBookings = bookingsResult.data ?? [];
         const remoteConversations = conversationsResult.data ?? [];
         const remoteReviews = reviewsResult.data ?? [];
+        setBookingReviews(remoteReviews);
 
         const connectedUsers = new Map<string, DemoState["users"][number]>();
         const addConnectedUser = (
@@ -1873,7 +2201,7 @@ export default function NanasPortal({
         ) => {
           const safeName =
             displayName.trim() ||
-            (userRole === "seller" ? "Nanas seller" : "Nanas buyer");
+            (userRole === "seller" ? "Nanas provider" : "Nanas buyer");
           const existing = connectedUsers.get(id);
           connectedUsers.set(id, {
             id,
@@ -1899,7 +2227,7 @@ export default function NanasPortal({
           if (!seller.user_id) continue;
           addConnectedUser(
             seller.user_id,
-            seller.display_name ?? "Nanas seller",
+            seller.display_name ?? "Nanas provider",
             "seller",
           );
           const sellerServices = Array.isArray(seller.services)
@@ -2097,13 +2425,13 @@ export default function NanasPortal({
           if (!connectedUsers.has(quote.buyer_id))
             addConnectedUser(quote.buyer_id, "Nanas buyer", "buyer");
           if (!connectedUsers.has(quote.seller_id))
-            addConnectedUser(quote.seller_id, "Nanas seller", "seller");
+            addConnectedUser(quote.seller_id, "Nanas provider", "seller");
         }
         for (const booking of remoteBookings) {
           if (!connectedUsers.has(booking.buyer_id))
             addConnectedUser(booking.buyer_id, "Nanas buyer", "buyer");
           if (!connectedUsers.has(booking.seller_id))
-            addConnectedUser(booking.seller_id, "Nanas seller", "seller");
+            addConnectedUser(booking.seller_id, "Nanas provider", "seller");
         }
         const userName = (id: string) =>
           connectedUsers.get(id)?.name ?? "Nanas member";
@@ -2144,7 +2472,7 @@ export default function NanasPortal({
             travel: Number(quote.travel_minor) / 100,
             fee: Number(quote.platform_fee_minor) / 100,
             total: Number(quote.total_minor) / 100,
-            message: String(snapshot.seller_message ?? "Verified seller quote"),
+            message: String(snapshot.seller_message ?? "Verified provider quote"),
             status: acceptedQuoteIds.has(quote.id)
               ? "accepted"
               : requestWasBooked
@@ -2158,16 +2486,21 @@ export default function NanasPortal({
         }
 
         const hydratedRequests: DemoRequest[] = remoteRequests.map(
-          (request) => ({
+          (request) => {
+            const schedule = schedulesByRequest.get(request.id);
+            return ({
             id: request.id,
             buyerId: request.buyer_id,
             buyerName: userName(request.buyer_id),
             service:
-              serviceNames.get(request.service_id) ?? "Healthcare service",
+              serviceNames.get(request.service_id) ?? "Care or household service",
             area: areaNames.get(request.service_area_id) ?? "The Bahamas",
             mode: request.mode,
             startsAt: request.desired_start,
             endsAt: request.desired_end,
+            schedule: schedule ? { kind: schedule.schedule_kind as "recurring" | "one_time", startDate: schedule.start_date, endDate: schedule.end_date, flexibleStart: schedule.flexible_start, weekdays: schedule.weekdays, timePeriods: schedule.time_periods, specificStart: schedule.specific_start, specificEnd: schedule.specific_end, scheduleMayVary: schedule.schedule_may_vary, timezone: schedule.timezone } : undefined,
+            createdAt: request.created_at,
+            publishedUntil: request.published_until,
             summary: request.care_summary,
             budget: Number(request.budget_minor ?? 0) / 100,
             status:
@@ -2179,7 +2512,7 @@ export default function NanasPortal({
                     ? "offered"
                     : "requested",
             quotes: quotesByRequest.get(request.id) ?? [],
-          }),
+          });},
         );
 
         const conversationByBooking = new Map(
@@ -2203,13 +2536,12 @@ export default function NanasPortal({
             sellerId: booking.seller_id,
             sellerName: userName(booking.seller_id),
             service:
-              serviceNames.get(booking.service_id) ?? "Healthcare service",
+              serviceNames.get(booking.service_id) ?? "Care or household service",
             startsAt: booking.scheduled_start,
             endsAt: booking.scheduled_end,
+            completedAt: booking.completed_at ?? undefined,
             status:
-              booking.status === "resolved"
-                ? "completed"
-                : booking.status === "confirmed" ||
+              booking.status === "resolved" || booking.status === "confirmed" ||
                     booking.status === "in_progress" ||
                     booking.status === "completion_pending" ||
                     booking.status === "completed" ||
@@ -2219,12 +2551,14 @@ export default function NanasPortal({
                   : "confirmed",
             total: Number(booking.total_minor) / 100,
             sellerNet: Number(booking.seller_net_minor) / 100,
+            cancellationFee: cancellationsResult.error ? undefined : Number(cancellationsResult.data?.find((item) => item.booking_id === booking.id)?.fee_minor ?? 0) / 100,
+            refundAmount: (refundsResult.data ?? []).filter((refund) => refund.booking_id === booking.id).reduce((total, refund) => total + Number(refund.amount_minor) / 100, 0),
             conversationId: conversationByBooking.get(booking.id) ?? "",
             reviewedBy: reviewAuthors.get(booking.id) ?? [],
           }),
         );
 
-        const hydratedMessages = (messagesResult.data ?? []).map((message) => ({
+        const hydratedMessages = [...(messagesResult.data ?? [])].reverse().map((message) => ({
           id: message.id,
           conversationId: message.conversation_id,
           senderId: message.sender_id,
@@ -2234,6 +2568,7 @@ export default function NanasPortal({
         }));
         const hydratedKyc = (verificationResult.data ?? []).map((item) => ({
           id: item.id,
+          decisionReason: item.decision_reason ?? undefined,
           sellerId: item.seller_id,
           sellerName: userName(item.seller_id),
           type: item.verification_type,
@@ -2243,7 +2578,7 @@ export default function NanasPortal({
             item.status === "needs_information"
               ? item.status
               : ("pending" as const),
-          fileName: "Private Supabase document",
+          fileName: "Private verification document",
           submittedAt: item.created_at,
         }));
 
@@ -2252,8 +2587,13 @@ export default function NanasPortal({
           users: adminUsers ?? [...connectedUsers.values()],
           requests: hydratedRequests,
           bookings: hydratedBookings,
+          disputes: disputesResult.error ? prev.disputes : (disputesResult.data ?? []).map((item) => ({
+            id: item.id, bookingId: item.booking_id, openedBy: item.opened_by,
+            reason: item.reason_code, summary: item.summary,
+            status: item.status === "resolved" || item.status === "closed" ? "resolved" : item.status === "escalated" ? "escalated" : "open",
+            resolution: item.resolution_code ? `${item.resolution_code.replaceAll("_", " ")}: ${item.resolution_note ?? ""}` : item.resolution_note ?? undefined,
+          })),
           messages: hydratedMessages,
-          favorites: (favoritesResult.data ?? []).map((item) => item.seller_id),
           supportCases: (supportResult.data ?? []).map((item) => ({
             id: item.id,
             openedBy: item.requester_id,
@@ -2298,6 +2638,7 @@ export default function NanasPortal({
             text: item.body ? `${item.title}: ${item.body}` : item.title,
             read: Boolean(item.read_at),
             at: item.created_at,
+            deepLink: item.deep_link ?? undefined,
           })),
           kyc: detectedRole === "admin" ? prev.kyc : hydratedKyc,
         }));
@@ -2307,7 +2648,7 @@ export default function NanasPortal({
       if (detectedRole !== routeRole)
         window.history.replaceState({}, "", `/app/${detectedRole}/overview`);
     })();
-  }, [backendConnected, routeRole]);
+  }, [backendConnected, routeRole, workspaceRevision, allowConnectedSimulation]);
 
   useEffect(() => {
     if (!backendConnected) return;
@@ -2335,6 +2676,13 @@ export default function NanasPortal({
           ),
         };
       });
+    };
+    const upsertLiveNotification = (row: RealtimeNotificationRow) => {
+      if (row.recipient_id !== currentUserId) return;
+      setState((previous) => ({ ...previous, notifications: [
+        ...(row.archived_at ? [] : [{ id: row.id, userId: row.recipient_id, text: row.body ? `${row.title}: ${row.body}` : row.title, read: Boolean(row.read_at), at: row.created_at, deepLink: row.deep_link ?? undefined }]),
+        ...previous.notifications.filter((item) => item.id !== row.id),
+      ].sort((a,b) => new Date(b.at).getTime()-new Date(a.at).getTime()) }));
     };
     const channel = supabase
       .channel(`nanas-message-feed-${currentUserId}`)
@@ -2364,6 +2712,8 @@ export default function NanasPortal({
           }));
         },
       )
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications", filter: `recipient_id=eq.${currentUserId}` }, (payload) => upsertLiveNotification(payload.new as RealtimeNotificationRow))
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "notifications", filter: `recipient_id=eq.${currentUserId}` }, (payload) => upsertLiveNotification(payload.new as RealtimeNotificationRow))
       .subscribe();
     return () => {
       void supabase.removeChannel(channel);
@@ -2376,7 +2726,16 @@ export default function NanasPortal({
   const openRequests = state.requests.filter((request) =>
     ["requested", "offered"].includes(request.status),
   );
-  const sellerVisibleRequests = openRequests
+  const connectedFeedRequests = providerFeedReady ? (providerFeed?.requests ?? []).map(request => ({ ...request, quotes: state.requests.find(item => item.id === request.id)?.quotes ?? [] })) : [];
+  const sellerEligibleRequests = [...connectedFeedRequests, ...openRequests.filter(request => !connectedFeedRequests.some(item => item.id === request.id))].filter((request) => demoMode || (
+    sellerApprovalStatus === "approved" &&
+    sellerPublishedAt !== null &&
+    new Date(request.startsAt).getTime() > eligibilityNow &&
+    (!request.publishedUntil || new Date(request.publishedUntil).getTime() > eligibilityNow) &&
+    sellerServiceRows.some((service) => service.active && service.name === request.service) &&
+    sellerCoverageRows.some((area) => area.active && area.name === request.area)
+  ));
+  const sellerVisibleRequests = backendConnected ? connectedFeedRequests : sellerEligibleRequests
     .filter((request) => {
       const haystack = [
         request.service,
@@ -2397,19 +2756,7 @@ export default function NanasPortal({
         (sellerJobArea === "all" || request.area === sellerJobArea)
       );
     })
-    .sort((left, right) => {
-      if (sellerJobSort === "budget")
-        return Number(right.budget) - Number(left.budget);
-      if (sellerJobSort === "soonest")
-        return (
-          new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime()
-        );
-      if (sellerJobSort === "quotes")
-        return left.quotes.length - right.quotes.length;
-      return (
-        new Date(right.startsAt).getTime() - new Date(left.startsAt).getTime()
-      );
-    });
+    .sort((left, right) => compareProviderRequests(left, right, sellerJobSort));
   const myQuotes = state.requests
     .flatMap((request) =>
       request.quotes.map((quote) => ({ ...quote, request })),
@@ -2431,9 +2778,40 @@ export default function NanasPortal({
   const unread = state.notifications.filter(
     (note) => note.userId === currentUserId && !note.read,
   ).length;
+  // Poll only body-free access metadata: locked replies are deliberately absent
+  // from both SELECT results and Realtime, so they cannot signal their own arrival.
+  useEffect(() => {
+    if (!backendConnected || !marketplaceLoaded || role === "admin") return;
+    let cancelled = false;
+    let running = false;
+    const refresh = async () => {
+      if (running) return;
+      running = true;
+      try {
+        const client = getSupabase();
+        if (!client) return;
+        const result = await client.rpc("conversation_access_state");
+        if (cancelled || result.error || !Array.isArray(result.data)) return;
+        const entries = Object.fromEntries(result.data.flatMap((row) => {
+          if (!row || typeof row !== "object" || Array.isArray(row) || typeof row.conversation_id !== "string") return [];
+          return [[row.conversation_id, { locked: row.locked !== false, can_send: row.can_send === true, unread_count: Number(row.unread_count ?? 0), last_read_at: typeof row.last_read_at === "string" ? row.last_read_at : null, other_last_read_at: typeof row.other_last_read_at === "string" ? row.other_last_read_at : null }]];
+        }));
+        setConversationAccess((previous) => JSON.stringify(previous) === JSON.stringify(entries) ? previous : entries);
+      } finally { running = false; }
+    };
+    void refresh();
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, section === "messages" ? 3000 : 15000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [backendConnected, marketplaceLoaded, currentUserId, role, section, workspaceRevision]);
+  useEffect(() => {
+    const previous = previousConversationLocks.current;
+    const unlockedElsewhere = Object.entries(conversationAccess).some(([id, access]) => previous[id] === true && !access.locked);
+    previousConversationLocks.current = Object.fromEntries(Object.entries(conversationAccess).map(([id, access]) => [id, access.locked]));
+    if (unlockedElsewhere) setWorkspaceRevision((value) => value + 1);
+  }, [conversationAccess]);
   const wallet = useMemo(
     () =>
-      role === "buyer"
+      backendConnected ? financeRecords.balance : role === "buyer"
         ? -state.bookings
             .filter((b) => b.buyerId === currentUserId)
             .reduce(
@@ -2449,8 +2827,10 @@ export default function NanasPortal({
           state.payouts
             .filter((payout) => payout.sellerId === currentUserId)
             .reduce((sum, payout) => sum + payout.amount, 0),
-    [state.bookings, state.payouts, role, currentUserId],
+    [state.bookings, state.payouts, role, currentUserId, backendConnected, financeRecords.balance],
   );
+  const connectedVerificationQueue = useVerificationQueue(backendConnected && role === "admin" && section === "overview");
+  const pendingVerificationCount = backendConnected ? connectedVerificationQueue : state.kyc.filter(item=>["pending","needs_information"].includes(item.status)).length;
   const adminOverview = backendConnected
     ? adminOps.overview
     : {
@@ -2458,7 +2838,7 @@ export default function NanasPortal({
         sellersUnderReview: state.kyc.filter((item) => item.status !== "approved").length,
         openRequests: state.requests.filter((item) => item.status === "requested" || item.status === "offered").length,
         activeBookings: state.bookings.filter((item) => ["confirmed", "in_progress", "completion_pending", "disputed"].includes(item.status)).length,
-        openDisputes: state.disputes.filter((item) => item.status === "open").length,
+        openDisputes: state.disputes.filter((item) => item.status !== "resolved").length,
         moderationQueue: state.moderationReports.filter((item) => item.status !== "resolved").length,
         simulatedVolume: state.bookings.reduce(
           (sum, item) =>
@@ -2474,14 +2854,56 @@ export default function NanasPortal({
       (new Date(booking.startsAt).getTime() - Date.now()) / 3600_000;
     const feePercent =
       role === "buyer" ? (hours >= 24 ? 0 : hours >= 6 ? 10 : 25) : 0;
-    const fee = Math.round((booking.total * feePercent) / 100);
+    const fee = Math.round(booking.total * feePercent) / 100;
     return { fee, refund: booking.total - fee, feePercent };
   };
 
-  const notify = (message: string) => {
+  const notify = (message: string, isError = false) => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    toastTimer.current = null;
+    setToastIsError(isError);
     setToast(message);
-    window.setTimeout(() => setToast(null), 2800);
+    if (!isError) toastTimer.current = window.setTimeout(() => setToast(null), Math.max(4000, Math.min(15000, message.length * 60)));
   };
+  async function saveNotificationPreference(name: string, enabled: boolean) {
+    if (savingNotificationPreference) return;
+    const categories: Record<string, string> = {
+      "Booking updates": "booking", Messages: "messages", "Payment receipts": "payments", "Credential reminders": "account",
+    };
+    setSavingNotificationPreference(true);
+    try {
+      if (!demoMode) await marketplaceCommand("set_notification_preference", { category: categories[name], enabled });
+      setNotificationPreferences((previous) => ({
+        ...previous, [currentUserId]: { ...previous[currentUserId], [name]: enabled },
+      }));
+      notify(`${name} preference saved.`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Could not save notification preference.");
+    } finally { setSavingNotificationPreference(false); }
+  }
+
+  async function openNotification(notification: DemoState["notifications"][number]) {
+    try {
+      if (!demoMode && !notification.read) {
+        await marketplaceCommand("mark_notification_read", { notification_id: notification.id });
+      }
+      setState((previous) => ({
+        ...previous,
+        notifications: previous.notifications.map((item) => item.id === notification.id ? { ...item, read: true } : item),
+      }));
+      const route = notification.deepLink?.match(/^\/app\/(buyer|seller|admin)\/([a-z-]+)(?:\/([A-Za-z0-9-]+))?$/);
+      if (route?.[1] === role && (route[2] === "notifications" || roleNav[role].some((item) => item.id === route[2]))) {
+        // Portal tabs use native history plus local state. Router-only navigation
+        // can reuse the current catch-all page and leave the old tab visible.
+        setSection(route[2], route[3]);
+        setSelected(route[3] ?? null);
+        setModal(route[2] === "bookings" && route[3] ? "booking-detail" : null);
+        setSidebarOpen(false);
+      }
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Could not mark notification as read.");
+    }
+  }
   const recordAdminAudit = (
     action: string,
     targetType: string,
@@ -2532,13 +2954,46 @@ export default function NanasPortal({
         "Sign out and use the matching connected test account to change roles.",
       );
     setRole(next);
-    setSection("overview");
+    setSectionState("overview");
+    setRouteEntityId(null);
     setSelected(null);
     setModal(null);
     setSidebarOpen(false);
     const query = demoMode ? "?demo=1" : "";
     window.history.pushState({}, "", `/app/${next}/overview${query}`);
   };
+  const setSection = (next: string, entityId?: string) => {
+    if (backendConnected && ["wallet", "earnings", "bookings", "disputes"].includes(next)) {
+      if (next === "wallet" || next === "earnings") setFinanceRecords((previous) => ({ ...previous, loaded: false, error: null }));
+      setWorkspaceRevision((previous) => previous + 1);
+    }
+    setSectionState(next);
+    setRouteEntityId(entityId ?? null);
+    const path = `/app/${role}/${next}${entityId ? `/${encodeURIComponent(entityId)}` : ""}`;
+    const query = demoMode ? "?demo=1" : "";
+    if (window.location.pathname + window.location.search !== path + query) {
+      window.history.pushState({}, "", path + query);
+    }
+  };
+  useEffect(() => {
+    const restoreRoute = () => {
+      const [, app, nextRole, nextSection, entityId] = window.location.pathname.split("/");
+      if (app !== "app" || !["buyer", "seller", "admin"].includes(nextRole)) return;
+      if (!demoMode && nextRole !== routeRole) { window.location.reload(); return; }
+      setRole(nextRole as DemoRole);
+      setSectionState(nextSection || "overview");
+      if (!demoMode && ["wallet", "earnings", "bookings", "disputes"].includes(nextSection)) {
+        if (nextSection === "wallet" || nextSection === "earnings") setFinanceRecords((previous) => ({ ...previous, loaded: false, error: null }));
+        setWorkspaceRevision((previous) => previous + 1);
+      }
+      setRouteEntityId(entityId ? decodeURIComponent(entityId) : null);
+      setSelected(entityId ? decodeURIComponent(entityId) : null);
+      setModal(null);
+      setSidebarOpen(false);
+    };
+    window.addEventListener("popstate", restoreRoute);
+    return () => window.removeEventListener("popstate", restoreRoute);
+  }, [demoMode, routeRole]);
   const chooseSection = (next: string) => {
     setSection(next);
     setSelected(null);
@@ -2572,6 +3027,7 @@ export default function NanasPortal({
   };
 
   function openRequestWizard(serviceIdValue?: string, initialStep = 0) {
+    setToast(null);
     const freeEligible = !state.requests.some(
       (request) => request.buyerId === currentUserId,
     );
@@ -2580,18 +3036,10 @@ export default function NanasPortal({
         (plan) => plan.active && (freeEligible ? plan.fee === 0 : plan.fee > 0),
       ) ?? defaultPostingPlans[freeEligible ? 0 : 1];
     const firstHousehold = householdMembers.find((member) => member.active);
+    const firstEmergencyContact = emergencyContacts.find((contact) => contact.consentConfirmed);
     setRequestStep(initialStep);
-    const selectedIntake = careIntakeCategories
-      .flatMap((category) =>
-        category.subcategories.map((subcategory) => ({
-          category,
-          subcategory,
-        })),
-      )
-      .find((item) => item.subcategory.serviceId === serviceIdValue);
-    const intakeCategory = selectedIntake?.category ?? careIntakeCategories[0];
-    const intakeSubcategory =
-      selectedIntake?.subcategory ?? intakeCategory.subcategories[0];
+    const { category: intakeCategory, subcategory: intakeSubcategory } =
+      requestIntakeSelection(careIntakeCategories, serviceIdValue);
     const initialRecipientLabel =
       intakeCategory.code === "child_care"
         ? "Child 1"
@@ -2602,9 +3050,10 @@ export default function NanasPortal({
       intakeCategory.code === "child_care" ? "child" : "family_member";
     setRequestDraft({
       categoryCode: intakeCategory.code,
-      subcategoryCode: intakeSubcategory.code,
-      serviceId: intakeSubcategory.serviceId,
+      subcategoryCode: intakeSubcategory?.code ?? "",
+      serviceId: intakeSubcategory?.serviceId ?? "",
       recipientId: firstHousehold?.id ?? "",
+      emergencyContactId: firstEmergencyContact?.id ?? "",
       recipientLabel: initialRecipientLabel,
       recipients: [
         {
@@ -2813,7 +3262,7 @@ export default function NanasPortal({
       requestStep === 2 &&
       requestDraft.categoryCode === "child_care" &&
       requestDraft.recipients.some(
-        (recipient) => !recipient.birthMonth || !recipient.birthYear,
+        (recipient) => !recipient.expecting && (!recipient.birthMonth || !recipient.birthYear),
       )
     )
       return notify("Add the birth month and year for every child.");
@@ -2828,9 +3277,9 @@ export default function NanasPortal({
     if (
       requestStep === 2 &&
       requestDraft.categoryCode === "pet_care" &&
-      requestDraft.pets.some((pet) => !pet.name.trim() || !pet.breed.trim())
+      requestDraft.pets.some((pet) => !pet.name.trim() || (!pet.mixedBreed && !pet.breed.trim()))
     )
-      return notify("Add a name and breed for every pet.");
+      return notify("Add a name and breed for every pet, or mark mixed breed.");
     if (requestStep === 3 && requestDraft.needs.length === 0)
       return notify("Choose at least one service or responsibility.");
     if (
@@ -2842,6 +3291,8 @@ export default function NanasPortal({
         !requestDraft.postalCode.trim())
     )
       return notify("Add the complete care address and postal or ZIP code.");
+    if (requestStep === 4 && requestDraft.emergencyContactId && !emergencyContacts.some((contact) => contact.id === requestDraft.emergencyContactId && contact.consentConfirmed))
+      return notify("Choose a contact with active consent or continue without one.");
     if (
       requestStep === 5 &&
       (!requestDraft.startsAt ||
@@ -2849,6 +3300,13 @@ export default function NanasPortal({
           Date.now())
     )
       return notify("Choose a future start date.");
+    if (
+      requestStep === 5 &&
+      requestDraft.scheduleKind === "recurring" &&
+      requestDraft.endDate &&
+      requestDraft.endDate < requestDraft.startsAt.slice(0, 10)
+    )
+      return notify("Choose an end date on or after the start date.");
     if (
       requestStep === 6 &&
       requestDraft.scheduleKind === "recurring" &&
@@ -2882,7 +3340,15 @@ export default function NanasPortal({
   }
 
   async function createRequest() {
+    if (requestPostingPending.current) return;
+    if (requestDraft.emergencyContactId && !emergencyContacts.some((contact) => contact.id === requestDraft.emergencyContactId && contact.consentConfirmed)) {
+      notify("The selected emergency contact no longer has active consent.");
+      setRequestStep(4);
+      return;
+    }
+    requestPostingPending.current = true;
     setBusy(true);
+    try {
     const startsAt = bahamasLocalToIso(
       `${requestDraft.startsAt.slice(0, 10)}T${requestDraft.startTime || requestDraft.startsAt.slice(11, 16) || "09:00"}`,
     );
@@ -2902,11 +3368,14 @@ export default function NanasPortal({
     const intakeCategory =
       careIntakeCategories.find(
         (item) => item.code === requestDraft.categoryCode,
-      ) ?? careIntakeCategories[0];
+      );
     const intakeSubcategory =
-      intakeCategory.subcategories.find(
+      intakeCategory?.subcategories.find(
         (item) => item.code === requestDraft.subcategoryCode,
-      ) ?? intakeCategory.subcategories[0];
+      );
+    if (!intakeCategory || !intakeSubcategory || intakeSubcategory.serviceId !== requestDraft.serviceId) {
+      return notify("Choose the exact service you need before publishing.");
+    }
     const service = intakeSubcategory.name;
     const area =
       liveAreas.find((item) => item.id === requestDraft.areaId)?.name ??
@@ -2928,6 +3397,9 @@ export default function NanasPortal({
       adminOps.postingPlans.find(
         (plan) => plan.code === requestDraft.postingPlanCode,
       ) ?? defaultPostingPlans[0];
+    if (!demoMode && chosenPlan.fee > 0 && !simulationAllowed) {
+      return notify("Paid request posting is not available yet. No payment was taken and no request was published.");
+    }
     let request: DemoRequest = {
       id: `req-${Date.now()}`,
       buyerId: currentUserId,
@@ -2937,23 +3409,24 @@ export default function NanasPortal({
       mode: requestDraft.mode,
       startsAt,
       endsAt,
+      schedule: { kind: requestDraft.scheduleKind, startDate: requestDraft.startsAt.slice(0, 10), endDate: requestDraft.endDate || null, flexibleStart: requestDraft.flexibleStart, weekdays: requestDraft.scheduleKind === "recurring" ? requestDraft.weekdays : [], timePeriods: requestDraft.useSpecificTimes ? [] : requestDraft.timePeriods, specificStart: requestDraft.useSpecificTimes ? requestDraft.startTime : null, specificEnd: requestDraft.useSpecificTimes ? requestDraft.endTime : null, scheduleMayVary: requestDraft.scheduleVaries, timezone: "America/Nassau" },
       summary: safeSummary,
       budget: requestDraft.budget,
       status: "requested",
       quotes: [],
     };
-    try {
-      const result = (await syncCommand("create_care_request", {
+      const payload = {
         service_id: requestDraft.serviceId,
         service_area_id: requestDraft.areaId,
         desired_start: startsAt,
         desired_end: endsAt,
         mode: requestDraft.mode,
         care_summary: request.summary,
-        budget_minor: request.budget * 100,
-        rate_min_minor: requestDraft.minRate * 100,
-        rate_max_minor: requestDraft.maxRate * 100,
+        budget_minor: Math.round(request.budget * 100),
+        rate_min_minor: Math.round(requestDraft.minRate * 100),
+        rate_max_minor: Math.round(requestDraft.maxRate * 100),
         household_member_id: requestDraft.recipientId || null,
+        emergency_contact_id: requestDraft.emergencyContactId || null,
         recipients: requestDraft.recipients.map((recipient) => ({
           label: recipient.label,
           relationship: recipient.relationship,
@@ -3021,32 +3494,39 @@ export default function NanasPortal({
         },
         access_notes: requestDraft.accessNotes,
         posting_plan_code: chosenPlan.code,
-        simulated_payment_confirmed: chosenPlan.fee > 0,
-      })) as { request_id?: string } | null;
+        simulated_payment_confirmed: (demoMode || simulationAllowed) && chosenPlan.fee > 0,
+        expected_fee_minor: Math.round(chosenPlan.fee * 100),
+      };
+      const key = demoMode ? undefined : await requestPostingKey(payload, currentUserId, sessionStorage);
+      const result = (await syncCommand("create_care_request", { ...payload, idempotency_key: key })) as { request_id?: string; simulation?: boolean; payment_intent_id?: string } | null;
+      if (!demoMode && !result?.request_id) throw new Error("Publication was not confirmed. Please retry; your checkout reference is preserved.");
       if (result?.request_id) request = { ...request, id: result.request_id };
+      sessionStorage.removeItem("nanas-care-request-draft");
       setState((prev) => ({
         ...prev,
-        requests: [request, ...prev.requests],
-        notifications: [
+        requests: [request, ...prev.requests.filter((item) => item.id !== request.id)],
+        notifications: demoMode ? [
           {
             id: `note-${Date.now()}`,
             userId: "seller-alicia",
             text: `New ${request.service} request near ${request.area}.`,
             read: false,
             at: new Date().toISOString(),
+            deepLink: `/app/seller/requests/${request.id}`,
           },
           ...prev.notifications,
-        ],
+        ] : prev.notifications,
       }));
       setModal(null);
       setSection("care-requests");
-      window.history.pushState({}, "", "/app/buyer/care-requests");
       notify(
-        `${chosenPlan.name} posted for ${chosenPlan.durationDays} days. Eligible sellers can now quote.`,
+        `${chosenPlan.name} posted for ${chosenPlan.durationDays} days.${result?.simulation ? " Test payment recorded; no real money charged." : ""} Eligible providers can now quote.`,
       );
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Request failed");
+      const reason = error && typeof error === "object" && "message" in error ? String(error.message) : "Request failed";
+      notify(reason === "price_changed" ? "The posting price changed. Refresh the page and review the current plan before submitting again." : reason === "test_payment_not_enabled" ? "Test payments are not enabled for this account. Nothing was charged or published." : reason);
     } finally {
+      requestPostingPending.current = false;
       setBusy(false);
     }
   }
@@ -3054,8 +3534,12 @@ export default function NanasPortal({
   async function submitQuote(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selected) return;
+    if (!sellerEligibleRequests.some((request) => request.id === selected)) {
+      return notify("This request is not eligible for your approved services and coverage.");
+    }
+    const request = sellerEligibleRequests.find((item) => item.id === selected);
+    if (!request) return notify("This request is no longer available to quote. Refresh matching requests and choose an eligible request.", true);
     setBusy(true);
-    const request = state.requests.find((item) => item.id === selected)!;
     const form = new FormData(event.currentTarget);
     const rate = Number(form.get("rate"));
     const travel = Number(form.get("travel"));
@@ -3095,7 +3579,7 @@ export default function NanasPortal({
         };
       setState((prev) => ({
         ...prev,
-        requests: prev.requests.map((item) =>
+        requests: [request, ...prev.requests.filter(item => item.id !== request.id)].map((item) =>
           item.id === request.id
             ? {
                 ...item,
@@ -3114,21 +3598,24 @@ export default function NanasPortal({
             text: `${currentUser.name} sent a quote for ${request.service}.`,
             read: false,
             at: new Date().toISOString(),
+            deepLink: `/app/buyer/care-requests/${request.id}`,
           },
           ...prev.notifications,
         ],
       }));
       setModal(null);
       setSection("quotes");
+      setWorkspaceRevision(value => value + 1);
       notify("Quote sent to the buyer.");
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Quote failed");
+      notify(providerEligibilityFeedback(error, "quote"), true);
     } finally {
       setBusy(false);
     }
   }
 
   async function acceptQuote(quote: DemoQuote, request: DemoRequest) {
+    if (!demoMode && !simulationAllowed) return notify("Booking payments are not available yet. No payment was taken and no booking was created.");
     setBusy(true);
     try {
       const result = (await syncCommand(
@@ -3136,6 +3623,13 @@ export default function NanasPortal({
         { quote_id: quote.id },
         true,
       )) as { booking_id?: string; reference?: string } | null;
+      if (backendConnected) {
+        if (!result?.booking_id) throw new Error("The test payment did not return a booking");
+        setWorkspaceRevision(value => value + 1);
+        notify(`TEST ONLY: payment simulated; ${result.reference ?? result.booking_id} confirmed. No real charge.`);
+        chooseSection("bookings");
+        return;
+      }
       const bookingId = result?.booking_id ?? `book-${Date.now()}`;
       let conversationId = `conv-${Date.now()}`;
       if (backendConnected && result?.booking_id) {
@@ -3187,16 +3681,15 @@ export default function NanasPortal({
             text: `${request.buyerName} accepted your quote. Booking ${booking.reference} is confirmed.`,
             read: false,
             at: new Date().toISOString(),
+            deepLink: `/app/seller/bookings/${booking.id}`,
           },
           ...prev.notifications,
         ],
       }));
       notify(`Payment simulated and ${booking.reference} confirmed.`);
-      setSection("bookings");
+      chooseSection("bookings");
     } catch (error) {
-      notify(
-        error instanceof Error ? error.message : "Payment simulation failed",
-      );
+      notify(providerEligibilityFeedback(error, "accept"), true);
     } finally {
       setBusy(false);
     }
@@ -3206,53 +3699,73 @@ export default function NanasPortal({
     booking: DemoBooking,
     target: DemoBooking["status"],
   ) {
+    if (bookingTransitionPending.current) return false;
+    bookingTransitionPending.current = true;
     setBusy(true);
     try {
-      await syncCommand(
+      const result = await syncCommand(
         "transition_booking",
         { booking_id: booking.id, target, reason: "portal_action" },
         true,
-      );
+      ) as { ok?: boolean; status?: DemoBooking["status"] } | null;
+      if (backendConnected && (!result?.ok || !result.status)) {
+        throw new Error("The booking update was not confirmed. Please refresh and try again.");
+      }
+      const savedStatus = result?.status ?? target;
       setState((prev) => ({
         ...prev,
         bookings: prev.bookings.map((item) =>
-          item.id === booking.id ? { ...item, status: target } : item,
+          item.id === booking.id ? { ...item, status: savedStatus } : item,
         ),
-        notifications: [
+        notifications: backendConnected ? prev.notifications : [
           {
             id: `note-${Date.now()}`,
             userId: role === "seller" ? booking.buyerId : booking.sellerId,
             text: `${booking.reference} is now ${target.replaceAll("_", " ")}.`,
             read: false,
             at: new Date().toISOString(),
+            deepLink: `/app/${role === "seller" ? "buyer" : "seller"}/bookings/${booking.id}`,
           },
           ...prev.notifications,
         ],
       }));
-      notify(`Booking updated to ${target.replaceAll("_", " ")}.`);
+      notify(`Booking updated to ${savedStatus.replaceAll("_", " ")}.`);
+      return true;
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Booking update failed");
+      notify(visitErrorMessage(error, "Booking update failed. Please refresh and try again."));
+      return false;
     } finally {
+      bookingTransitionPending.current = false;
       setBusy(false);
     }
   }
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selected) return;
+    if (!selected || messageSending.current) return;
     if (isBuyerConversationPaywalled(selected)) {
-      notify("Upgrade to view and continue this seller conversation.");
+      notify("Upgrade to view and continue this provider conversation.");
       return;
     }
     const form = new FormData(event.currentTarget);
     const body = String(form.get("body")).trim();
     if (!body) return;
+    messageSending.current = true;
+    setBusy(true);
+    if (messageAttempt.current?.conversationId !== selected || messageAttempt.current.body !== body) {
+      messageAttempt.current = { conversationId: selected, body, nonce: crypto.randomUUID() };
+    }
     try {
-      await syncCommand("send_message", {
+      const result = await syncCommand("send_message", {
         conversation_id: selected,
         body,
-        sender_nonce: crypto.randomUUID(),
+        sender_nonce: messageAttempt.current.nonce,
       });
+      const saved = result as { message?: { id: string; created_at: string } } | null;
+      if (backendConnected && saved?.message) {
+        const message = saved.message;
+        setState((previous) => previous.messages.some((item) => item.id === message.id) ? previous : ({ ...previous, messages: [...previous.messages, { id: message.id, conversationId: selected, senderId: currentUserId, senderName: currentUser.name, body, at: message.created_at }] }));
+      }
       if (!backendConnected)
         setState((prev) => ({
           ...prev,
@@ -3283,6 +3796,7 @@ export default function NanasPortal({
                     text: `${currentUser.name} sent a secure message about ${booking?.reference ?? "your booking"}.`,
                     read: false,
                     at: new Date().toISOString(),
+                    deepLink: `/app/${role === "buyer" ? "seller" : "buyer"}/messages/${selected}`,
                   },
                   ...prev.notifications,
                 ]
@@ -3290,14 +3804,19 @@ export default function NanasPortal({
           })(),
         }));
       setModal(null);
+      messageAttempt.current = null;
       notify("Secure message sent.");
     } catch (error) {
       notify(error instanceof Error ? error.message : "Message failed");
+    } finally {
+      messageSending.current = false;
+      setBusy(false);
     }
   }
 
   function isBuyerConversationPaywalled(conversationId: string) {
-    if (role !== "buyer" || unlockedConversations.includes(conversationId))
+    if (backendConnected) return role === "buyer" && (conversationAccess[conversationId]?.locked ?? true);
+    if (role !== "buyer" || (demoMode && unlockedConversations.includes(conversationId)))
       return false;
     const booking = state.bookings.find(
       (item) => item.conversationId === conversationId,
@@ -3322,14 +3841,29 @@ export default function NanasPortal({
     setModal("message-upgrade");
   }
 
-  function simulateMessageUpgrade(event: FormEvent<HTMLFormElement>) {
+  async function simulateMessageUpgrade(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selected) return;
+    if (!demoMode && !simulationAllowed) return notify("Paid messaging is not available yet. No payment has been taken.");
+    if (!selected || busy) return;
+    if (backendConnected) {
+      const plan = adminOps.postingPlans.find((item) => item.code === "premium" && item.active);
+      if (!plan) return notify("Messaging price unavailable. No payment was taken.");
+      setBusy(true);
+      try {
+        await syncCommand("purchase_conversation", { conversation_id: selected, amount_minor: Math.round(plan.fee * 100) }, true);
+        setWorkspaceRevision((value) => value + 1);
+        setModal(null);
+        notify("TEST ONLY: simulated messaging payment recorded. Conversation unlocked.");
+      } catch (error) { notify(error instanceof Error ? error.message : "Could not unlock conversation."); }
+      finally { setBusy(false); }
+      return;
+    }
     unlockConversation(selected);
     setModal(null);
   }
 
   function simulatePayout() {
+    if (!demoMode) return notify("Payouts require a connected payment provider. No payout has been requested.");
     if (wallet <= 0) return notify("No completed-care balance is available to pay out.");
     setState((previous) => ({
       ...previous,
@@ -3349,26 +3883,34 @@ export default function NanasPortal({
 
   async function submitReview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selected) return;
+    if (!selected || reviewSubmitting.current) return;
     const form = new FormData(event.currentTarget);
+    reviewSubmitting.current = true;
+    setBusy(true);
     try {
-      await syncCommand("submit_review", {
+      const result = await syncCommand("submit_review", {
         booking_id: selected,
         rating: Number(form.get("rating")),
         body: String(form.get("body")),
-      });
+      }) as { ok?: boolean; review_id?: string; published?: boolean } | null;
+      if (backendConnected && (!result?.ok || !result.review_id)) throw new Error("The review was not confirmed. Please try again.");
       setState((prev) => ({
         ...prev,
         bookings: prev.bookings.map((b) =>
           b.id === selected
-            ? { ...b, reviewedBy: [...b.reviewedBy, currentUserId] }
+            ? { ...b, reviewedBy: [...new Set([...b.reviewedBy, currentUserId])] }
             : b,
         ),
       }));
+      if (backendConnected) setWorkspaceRevision((value) => value + 1);
       setModal(null);
-      notify("Verified booking review submitted.");
+      notify(result?.published ? "Verified review published." : "Review submitted privately. It publishes after both parties review or seven days after completion.");
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Review failed");
+      const message = error && typeof error === "object" && "message" in error ? String(error.message) : "";
+      notify(message === "review_already_submitted" ? "You have already submitted a review for this booking." : message === "review_not_eligible" ? "Only participants in a completed booking can review it." : error instanceof Error ? error.message : "Review failed. Please try again.");
+    } finally {
+      reviewSubmitting.current = false;
+      setBusy(false);
     }
   }
 
@@ -3427,7 +3969,7 @@ export default function NanasPortal({
       setState((prev) => ({
         ...prev,
         kyc: prev.kyc.map((item) =>
-          item.id === selected ? { ...item, status: decision } : item,
+          item.id === selected ? { ...item, status: decision, decisionReason: reason } : item,
         ),
       }));
       recordAdminAudit("kyc.review", "verification_case", selected, reason);
@@ -3459,11 +4001,17 @@ export default function NanasPortal({
             original_name: file.name,
           })) as { case_id?: string } | null)
         : null;
+      const existingCase = state.kyc.find((item) =>
+        created?.case_id ? item.id === created.case_id :
+          item.sellerId === currentUserId && item.type === String(form.get("type")) &&
+          (item.status === "pending" || item.status === "needs_information"),
+      );
+      const caseId = created?.case_id ?? existingCase?.id ?? `kyc-${Date.now()}`;
       setState((prev) => ({
         ...prev,
         kyc: [
           {
-            id: created?.case_id ?? `kyc-${Date.now()}`,
+            id: caseId,
             sellerId: currentUserId,
             sellerName: currentUser.name,
             type: String(form.get("type")),
@@ -3471,9 +4019,10 @@ export default function NanasPortal({
             fileName: file.name,
             submittedAt: new Date().toISOString(),
           },
-          ...prev.kyc,
+          ...prev.kyc.filter((item) => item.id !== caseId),
         ],
       }));
+      setSellerApprovalStatus((current) => current === "approved" || current === "paused" ? current : "under_review");
       setModal(null);
       notify("Document uploaded securely to the private KYC queue.");
     } catch (error) {
@@ -3485,39 +4034,75 @@ export default function NanasPortal({
     }
   }
 
-  function toggleFavorite(sellerId: string) {
+  async function toggleFavorite(sellerId: string) {
+    if (favoriteWrites.current.has(sellerId)) return;
+    if (role !== "buyer" || !favoritesLoaded || favoritesLoadError) return notify("Refresh your saved providers before making changes.");
     const favorite = !state.favorites.includes(sellerId);
-    setState((prev) => ({
-      ...prev,
-      favorites: favorite
-        ? [...prev.favorites, sellerId]
-        : prev.favorites.filter((id) => id !== sellerId),
-    }));
-    void syncCommand("toggle_favorite", {
-      seller_id: sellerId,
-      favorite,
-    }).catch(() => notify("Favorite saved locally; backend sync will retry."));
-    notify(
-      favorite
-        ? "Seller added to favorites."
-        : "Seller removed from favorites.",
-    );
+    favoriteWrites.current.add(sellerId);
+    ++favoriteRevision.current;
+    setFavoritePending(ids => [...ids, sellerId]);
+    try {
+      if (!demoMode) checkFavoriteConfirmation(await syncCommand("toggle_favorite", { seller_id: sellerId, favorite }), sellerId, favorite);
+      setState(previous => ({ ...previous, favorites: applyFavorite(previous.favorites, sellerId, favorite) }));
+      notify(favorite ? "Provider saved to My Nanas." : "Provider removed from My Nanas.");
+    } catch (error) {
+      const message = error && typeof error === "object" && "message" in error ? String(error.message) : "";
+      notify(message === "provider_unavailable" ? "This provider is no longer available to save. Refresh Find care to see current profiles." : "The saved-provider change could not be confirmed. Refresh to check your list, then try again.");
+    } finally {
+      favoriteWrites.current.delete(sellerId);
+      setFavoritePending(ids => ids.filter(id => id !== sellerId));
+    }
+  }
+
+  async function loadCancellationPreview(booking: DemoBooking) {
+    const request = ++cancellationPreviewRequest.current;
+    setModal("cancel-booking");
+    setCancellationEstimate(null);
+    setCancellationError(null);
+    if (!backendConnected) return;
+    setCancellationLoading(true);
+    try {
+      const result = await syncCommand("preview_cancellation", { booking_id: booking.id }) as {
+        ok?: boolean; booking_id?: string; currency?: string; captured_minor?: number;
+        fee_minor?: number; refund_minor?: number; policy?: { fee_percent?: number };
+      } | null;
+      const { captured_minor: captured, fee_minor: fee, refund_minor: refund } = result ?? {};
+      if (!result?.ok || result.booking_id !== booking.id || !result.currency ||
+        ![captured, fee, refund].every((amount) => typeof amount === "number" && Number.isSafeInteger(amount) && amount >= 0) ||
+        captured !== fee! + refund! || typeof result.policy?.fee_percent !== "number") {
+        throw new Error("Could not verify the cancellation amounts. Please retry.");
+      }
+      if (request === cancellationPreviewRequest.current) setCancellationEstimate({ bookingId: booking.id, currency: result.currency, capturedMinor: captured!, feeMinor: fee!, refundMinor: refund!, feePercent: result.policy.fee_percent });
+    } catch (error) {
+      if (request === cancellationPreviewRequest.current) setCancellationError(error && typeof error === "object" && "message" in error ? String(error.message) : "Cancellation preview could not be loaded.");
+    } finally {
+      if (request === cancellationPreviewRequest.current) setCancellationLoading(false);
+    }
   }
 
   async function cancelBooking(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selected) return;
+    if (!selected || cancellationPending.current) return;
     const booking = state.bookings.find((item) => item.id === selected);
     if (!booking) return;
+    if (backendConnected && (cancellationLoading || cancellationEstimate?.bookingId !== booking.id)) return;
     const cancellation = cancellationPreview(booking);
     const reason = String(new FormData(event.currentTarget).get("reason"));
+    cancellationPending.current = true;
     setBusy(true);
     try {
-      await syncCommand(
+      const result = await syncCommand(
         "cancel_booking",
-        { booking_id: booking.id, reason_code: reason },
+        { booking_id: booking.id, reason_code: reason, expected_fee_minor: cancellationEstimate?.feeMinor },
         true,
-      );
+      ) as { ok?: boolean; status?: string; fee_minor?: number; refund_minor?: number; replayed?: boolean } | null;
+      if (backendConnected) {
+        if (!result?.ok || result.status !== "cancelled") throw new Error("Cancellation could not be confirmed. Refresh the booking before retrying.");
+        setWorkspaceRevision((previous) => previous + 1);
+        setModal(null);
+        notify(result.replayed ? "This booking was already cancelled. Financial records are being refreshed." : "Booking cancelled. The simulated refund is recorded in the buyer’s wallet.");
+        return;
+      }
       setState((prev) => ({
         ...prev,
         bookings: prev.bookings.map((item) =>
@@ -3537,6 +4122,7 @@ export default function NanasPortal({
             text: `${booking.reference} was cancelled. The simulated refund was recorded.`,
             read: false,
             at: new Date().toISOString(),
+            deepLink: `/app/${role === "buyer" ? "seller" : "buyer"}/bookings/${booking.id}`,
           },
           ...prev.notifications,
         ],
@@ -3546,26 +4132,40 @@ export default function NanasPortal({
         "Booking cancelled. Simulated refund and ledger reversal recorded.",
       );
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Cancellation failed");
+      const message = error && typeof error === "object" && "message" in error ? String(error.message) : "Cancellation failed";
+      if (message.includes("cancellation_preview_changed")) {
+        await loadCancellationPreview(booking);
+        setCancellationError("The cancellation fee changed. Review the updated amounts before confirming again.");
+      } else setCancellationError(message);
     } finally {
+      cancellationPending.current = false;
       setBusy(false);
     }
   }
 
   async function openDispute(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selected) return;
+    if (!selected || disputePending.current) return;
     const booking = state.bookings.find((item) => item.id === selected);
     if (!booking) return;
     const form = new FormData(event.currentTarget);
     const reason = String(form.get("reason"));
     const summary = String(form.get("summary"));
+    disputePending.current = true;
+    setBusy(true);
     try {
       const result = (await syncCommand(
         "open_dispute",
         { booking_id: booking.id, reason_code: reason, summary },
         true,
-      )) as { dispute_id?: string } | null;
+      )) as { ok?: boolean; dispute_id?: string; status?: string; replayed?: boolean } | null;
+      if (backendConnected) {
+        if (!result?.ok || !result.dispute_id) throw new Error("The dispute could not be confirmed. Refresh before retrying.");
+        setWorkspaceRevision((previous) => previous + 1);
+        setModal(null);
+        notify(result.replayed ? `Existing dispute is ${result.status}.` : "Dispute opened for admin review. Previously released funds are not automatically held.");
+        return;
+      }
       setState((prev) => ({
         ...prev,
         bookings: prev.bookings.map((item) =>
@@ -3587,6 +4187,9 @@ export default function NanasPortal({
       notify("Dispute opened. Simulated funds are held for admin review.");
     } catch (error) {
       notify(error instanceof Error ? error.message : "Dispute failed");
+    } finally {
+      disputePending.current = false;
+      setBusy(false);
     }
   }
 
@@ -3688,6 +4291,10 @@ export default function NanasPortal({
 
   function processPrivacyRequest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!demoMode) {
+      notify("Privacy processing is not connected yet. This request has not been changed.");
+      return;
+    }
     if (!selected) return;
     const form = new FormData(event.currentTarget);
     const nextStatus = String(form.get("status")) as
@@ -3717,19 +4324,12 @@ export default function NanasPortal({
 
   async function openAdminConversation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selected) return;
+    if (!selected || backendConnected) return;
     const form = new FormData(event.currentTarget);
     const purpose = String(form.get("purpose"));
     const caseId = String(form.get("caseId")).trim();
     const reason = String(form.get("reason")).trim();
     try {
-      if (backendConnected)
-        await adminCommand("read_messages", {
-          conversation_id: selected,
-          purpose_code: purpose,
-          case_id: caseId,
-          reason,
-        });
       recordSensitiveAccess(
         `conversation:${selected}`,
         `${purpose} · ${caseId} · ${reason}`,
@@ -3742,13 +4342,34 @@ export default function NanasPortal({
     }
   }
 
+  function visitErrorMessage(error: unknown, fallback: string) {
+    const message = error && typeof error === "object" && "message" in error ? String(error.message) : "";
+    const messages: Record<string, string> = {
+      outside_session_code_window: "Visit codes work from two hours before the scheduled start until two hours after the scheduled end.",
+      session_code_expired: "This visit code has expired. Ask the buyer to generate a new code.",
+      session_code_incorrect: "The visit code is incorrect. Please check it with the buyer.",
+      session_code_locked: "Too many incorrect attempts. Ask the buyer to generate a new visit code.",
+      invalid_session_code: "Enter the six-digit visit code shared by the buyer.",
+      verified_session_code_required: "A valid buyer visit code is required before check-in.",
+      session_code_not_allowed: "This booking is no longer waiting for check-in. Please refresh its status.",
+      transition_not_allowed: "This booking action is no longer available. Please refresh its status.",
+    };
+    return messages[message] ?? (error instanceof Error ? error.message : fallback);
+  }
+
   async function generateSessionCode(booking: DemoBooking) {
+    if (visitCodePending.current) return;
+    visitCodePending.current = true;
+    setBusy(true);
     try {
       const result = (await syncCommand(
         "generate_session_code",
         { booking_id: booking.id },
         true,
-      )) as { code?: string } | null;
+      )) as { ok?: boolean; code?: string } | null;
+      if (backendConnected && (!result?.ok || !result.code || !/^[0-9]{6}$/.test(result.code))) {
+        throw new Error("No visit code was issued. Please try again.");
+      }
       const code =
         result?.code ?? String(Math.floor(100000 + Math.random() * 900000));
       setState((prev) => ({
@@ -3759,55 +4380,82 @@ export default function NanasPortal({
         "Short-lived visit code generated. Share it only with the other booking party.",
       );
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Session code failed");
+      notify(visitErrorMessage(error, "Visit code generation failed. Please try again."));
+    } finally {
+      visitCodePending.current = false;
+      setBusy(false);
     }
   }
 
   async function verifySessionAndCheckIn(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selected) return;
+    if (!selected || visitCodePending.current) return;
     const booking = state.bookings.find((item) => item.id === selected);
     if (!booking) return;
     const code = String(new FormData(event.currentTarget).get("code"));
     if (!backendConnected && code !== state.sessionCodes[booking.id])
       return notify("The visit code is incorrect or expired.");
+    visitCodePending.current = true;
+    setBusy(true);
     try {
-      if (backendConnected)
-        await syncCommand(
+      if (backendConnected) {
+        const result = await syncCommand(
           "verify_session_code",
           { booking_id: booking.id, code },
           true,
-        );
-      await transition(booking, "in_progress");
+        ) as { ok?: boolean; verified?: boolean; error?: string } | null;
+        if (!result?.ok || !result.verified) {
+          throw new Error(result?.error ?? "The visit code could not be verified.");
+        }
+      }
+      if (!await transition(booking, "in_progress")) return;
       setModal(null);
       notify("Visit code verified and care visit checked in.");
     } catch (error) {
       notify(
-        error instanceof Error ? error.message : "Code verification failed",
+        visitErrorMessage(error, "Code verification failed. Please try again."),
       );
+    } finally {
+      visitCodePending.current = false;
+      setBusy(false);
     }
   }
 
   async function resolveDispute(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selected) return;
+    if (!selected || disputePending.current) return;
     const form = new FormData(event.currentTarget);
     const outcome = String(form.get("outcome"));
     const reason = String(form.get("reason")).trim();
+    const dispute = state.disputes.find((item) => item.id === selected);
+    const booking = state.bookings.find((item) => item.id === dispute?.bookingId);
+    const refund = Number(form.get("refundAmount"));
+    if (outcome === "partial_refund" && (!Number.isFinite(refund) || refund <= 0 || !booking || refund > booking.total - (booking.refundAmount ?? 0))) {
+      return notify("Enter a partial refund greater than zero and no more than the remaining booking payment.");
+    }
+    disputePending.current = true;
+    setBusy(true);
     try {
-      if (backendConnected)
-        await adminCommand("resolve_dispute", {
+      if (backendConnected) {
+        const result = await adminCommand("resolve_dispute", {
           dispute_id: selected,
           resolution_code: outcome,
           note: reason,
-        });
+          refund_minor: outcome === "partial_refund" ? Math.round(refund * 100) : null,
+        }) as { ok?: boolean; status?: string; resolution_code?: string; refund_minor?: number; replayed?: boolean } | null;
+        if (!result?.ok || !["resolved", "closed", "escalated"].includes(result.status ?? "")) throw new Error("The saved resolution could not be confirmed. Refresh the case before retrying.");
+        setWorkspaceRevision((previous) => previous + 1);
+        setModal(null);
+        notify(result.status === "escalated" ? "Dispute escalated; it remains open." : `Saved resolution: ${(result.resolution_code ?? "resolved").replaceAll("_", " ")}${result.refund_minor ? ` · ${money(result.refund_minor / 100)} simulated refund` : ""}.`);
+        return;
+      }
       setState((prev) => ({
         ...prev,
         disputes: prev.disputes.map((item) =>
           item.id === selected
             ? {
                 ...item,
-                status: "resolved",
+                status: outcome === "escalate" ? "escalated" : "resolved",
                 resolution: `${outcome.replaceAll("_", " ")}: ${reason}`,
               }
             : item,
@@ -3815,27 +4463,36 @@ export default function NanasPortal({
       }));
       recordAdminAudit("dispute.resolve", "dispute", selected, `${outcome}: ${reason}`);
       setModal(null);
-      notify("Dispute resolved and audit event recorded.");
+      notify(outcome === "escalate" ? "Dispute escalated for further review; it remains open." : demoMode ? "Demo resolution recorded. No real funds were moved." : "Dispute resolved and audit event recorded.");
     } catch (error) {
       notify(
-        error instanceof Error ? error.message : "Dispute resolution failed",
+        error instanceof Error ? error.message : error && typeof error === "object" && "message" in error ? String(error.message).replaceAll("_", " ") : "Dispute resolution failed",
       );
+    } finally {
+      disputePending.current = false;
+      setBusy(false);
     }
   }
   async function resolveModerationReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selected) return;
+    if (!selected || moderationPending.current) return;
     const form = new FormData(event.currentTarget);
     const moderationAction = String(form.get("moderationAction"));
+    moderationPending.current=true;
+    setBusy(true);
     try {
-      if (backendConnected)
-        await adminCommand("resolve_moderation", {
+      if (backendConnected) {
+        const result=await adminCommand("resolve_moderation", {
           report_id: selected,
           moderation_action: moderationAction,
           reason_code: String(form.get("reasonCode")),
           public_note: String(form.get("publicNote") ?? ""),
           private_note: String(form.get("privateNote") ?? ""),
         });
+        if(!result?.ok || result.report_id!==selected || result.action!==moderationAction || result.status!==(moderationAction==='escalate'?'escalated':'resolved'))
+          throw new Error('moderation_response_unconfirmed');
+        setWorkspaceRevision(value=>value+1);
+      }
       setState((prev) => ({
         ...prev,
         moderationReports: prev.moderationReports.map((item) =>
@@ -3855,12 +4512,12 @@ export default function NanasPortal({
         `${moderationAction}: ${String(form.get("reasonCode"))}`,
       );
       setModal(null);
-      notify("Moderation decision recorded with an immutable audit entry.");
+      notify(moderationAction==='escalate'?"Report escalated; it remains open for further review.":moderationAction==='warn'?"Warning queued and moderation decision recorded.":"Moderation action confirmed and audited.");
     } catch (error) {
       notify(
-        error instanceof Error ? error.message : "Moderation action failed",
+        moderationError(error),
       );
-    }
+    } finally {moderationPending.current=false;setBusy(false);}
   }
   async function manageOperationsCase(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -3995,8 +4652,8 @@ export default function NanasPortal({
       setModal(null);
       notify(
         existing
-          ? "Healthcare service configuration updated."
-          : "Healthcare service created.",
+          ? "Care or household service configuration updated."
+          : "Care or household service created.",
       );
     } catch (error) {
       notify(
@@ -4130,7 +4787,7 @@ export default function NanasPortal({
         "upsert_household_member",
         payload,
       )) as { member_id?: string } | null;
-      const id = result?.member_id ?? existing?.id ?? `member-${Date.now()}`;
+      const id = result!.member_id!;
       const member = {
         id,
         relationship: payload.relationship,
@@ -4149,6 +4806,106 @@ export default function NanasPortal({
       notify(error instanceof Error ? error.message : "Care recipient failed");
     }
   }
+  async function saveEmergencyContact(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const existing = emergencyContacts.find((item) => item.id === selected);
+    const payload = {
+      contact_id: existing?.id ?? null,
+      name: String(form.get("name")),
+      phone_e164: String(form.get("phone")),
+      relationship: String(form.get("relationship")),
+      priority: Number(form.get("priority")),
+      consent_confirmed: form.get("consent") === "on",
+    };
+    try {
+      const result = demoMode
+        ? { contact_id: existing?.id ?? `demo-contact-${Date.now()}` }
+        : await syncCommand("upsert_emergency_contact", payload) as { contact_id?: string } | null;
+      if (!result?.contact_id) throw new Error("Emergency contact save was not confirmed.");
+      const contact = { id: result.contact_id, name: payload.name.trim(), phone: payload.phone_e164.trim(), relationship: payload.relationship.trim(), priority: payload.priority, consentConfirmed: true };
+      setEmergencyContacts((prev) => [...prev.filter((item) => item.id !== contact.id), contact].sort((a, b) => a.priority - b.priority));
+      setModal(null);
+      notify("Emergency contact saved with consent.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Emergency contact failed");
+    }
+  }
+  async function revokeEmergencyContact(contactId: string) {
+    try {
+      if (!demoMode) await syncCommand("revoke_emergency_contact", { contact_id: contactId });
+      setEmergencyContacts((prev) => prev.map((item) => item.id === contactId ? { ...item, consentConfirmed: false } : item));
+      setRequestDraft((draft) => draft.emergencyContactId === contactId ? { ...draft, emergencyContactId: "" } : draft);
+      notify("Emergency-contact consent revoked.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Consent revocation failed");
+    }
+  }
+  async function loadBookingEmergencyContact(bookingId: string) {
+    setBookingEmergencyLoading(true);
+    setBookingEmergencyContact(null);
+    try {
+      if (demoMode) {
+        const contact = emergencyContacts.find((item) => item.consentConfirmed);
+        setBookingEmergencyContact({ bookingId, configured: !!contact, contact: contact ? { id: contact.id, name: contact.name, phone: contact.phone, relationship: contact.relationship } : undefined });
+      } else {
+        const result = await syncCommand("booking_emergency_contact", { booking_id: bookingId }) as { booking_id: string; configured: boolean; access_log_id?: string; contact?: { id: string; name: string; phone_e164: string; relationship: string } } | null;
+        if (!result) throw new Error("Emergency contact access was not confirmed.");
+        setBookingEmergencyContact({ bookingId: result.booking_id, configured: result.configured, accessLogId: result.access_log_id, contact: result.contact ? { id: result.contact.id, name: result.contact.name, phone: result.contact.phone_e164, relationship: result.contact.relationship } : undefined });
+      }
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Emergency contact is unavailable");
+    } finally { setBookingEmergencyLoading(false); }
+  }
+  async function loadVisitUpdates(bookingId: string) {
+    setVisitUpdateLoading(true);
+    try {
+      if (demoMode) {
+        let updates: { id: string; providerId: string; updateType: string; note: string; occurredAt: string }[] = [];
+        try {
+          const saved = JSON.parse(localStorage.getItem("nanas-demo-visit-updates-v1") ?? "{}") as Record<string, typeof updates>;
+          if (Array.isArray(saved[bookingId])) updates = saved[bookingId];
+        } catch { /* Ignore malformed local demo evidence. */ }
+        setVisitUpdateTimeline({ bookingId, updates });
+      } else {
+        const result = await syncCommand("booking_visit_update_page", { booking_id: bookingId, limit: 50 }) as { booking_id: string; updates: { id: string; provider_id: string; update_type: string; note: string; occurred_at: string }[] } | null;
+        if (!result) throw new Error("Visit updates could not be confirmed.");
+        setVisitUpdateTimeline({ bookingId: result.booking_id, updates: result.updates.map((item) => ({ id: item.id, providerId: item.provider_id, updateType: item.update_type, note: item.note, occurredAt: item.occurred_at })) });
+      }
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Visit updates are unavailable");
+    } finally { setVisitUpdateLoading(false); }
+  }
+  async function postVisitUpdate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const booking = state.bookings.find((item) => item.id === selected);
+    if (!booking || role !== "seller" || booking.status !== "in_progress") return notify("Visit updates are available only during an active visit.");
+    const form = new FormData(formElement);
+    const updateType = String(form.get("updateType"));
+    const note = String(form.get("note")).trim();
+    const clientNonce = crypto.randomUUID();
+    setBusy(true);
+    try {
+      const result = demoMode
+        ? { visit_update_id: crypto.randomUUID(), booking_id: booking.id, occurred_at: new Date().toISOString() }
+        : await syncCommand("add_booking_visit_update", { booking_id: booking.id, update_type: updateType, note, client_nonce: clientNonce }) as { visit_update_id?: string; booking_id?: string; occurred_at?: string } | null;
+      if (!result?.visit_update_id || result.booking_id !== booking.id || !result.occurred_at) throw new Error("Visit update save was not confirmed.");
+      const update = { id: result.visit_update_id, providerId: currentUserId, updateType, note, occurredAt: result.occurred_at };
+      if (demoMode) {
+        try {
+          const saved = JSON.parse(localStorage.getItem("nanas-demo-visit-updates-v1") ?? "{}") as Record<string, { id: string; providerId: string; updateType: string; note: string; occurredAt: string }[]>;
+          saved[booking.id] = [update, ...(Array.isArray(saved[booking.id]) ? saved[booking.id].filter((item) => item.id !== update.id) : [])];
+          localStorage.setItem("nanas-demo-visit-updates-v1", JSON.stringify(saved));
+        } catch { /* Keep the active demo visit usable when local storage is unavailable. */ }
+      }
+      setVisitUpdateTimeline((current) => ({ bookingId: booking.id, updates: [update, ...(current?.bookingId === booking.id ? current.updates.filter((item) => item.id !== update.id) : [])] }));
+      formElement.reset();
+      notify("Private visit update shared with the buyer.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Visit update failed");
+    } finally { setBusy(false); }
+  }
   async function saveWeeklyAvailability(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -4157,6 +4914,10 @@ export default function NanasPortal({
     );
     const start = String(form.get("start")),
       end = String(form.get("end"));
+    if (!/^\d{2}:\d{2}$/.test(start) || !/^\d{2}:\d{2}$/.test(end) || end <= start) {
+      notify("End time must be after start time. Use a same-day availability window.");
+      return;
+    }
     try {
       await syncCommand("seller_replace_weekly_availability", {
         weekdays,
@@ -4250,7 +5011,7 @@ export default function NanasPortal({
         serviceId: serviceIdValue,
         name:
           liveServices.find((item) => item.id === serviceIdValue)?.name ??
-          "Healthcare service",
+          "Care or household service",
         rate,
         rateMax,
         bio,
@@ -4266,9 +5027,27 @@ export default function NanasPortal({
       setModal(null);
       notify("Service-specific public profile saved.");
     } catch (error) {
-      notify(error instanceof Error ? error.message : "Seller service failed");
+      notify(error instanceof Error ? error.message : "Provider service failed");
     }
   }
+  async function setProviderPublication(published: boolean) {
+    setBusy(true);
+    try {
+      const result = await syncCommand("seller_set_publication", { published }) as { published_at?: string | null } | null;
+      setSellerPublishedAt(result?.published_at ?? (published ? new Date().toISOString() : null));
+      if (demoMode) setState((previous) => ({
+        ...previous,
+        users: previous.users.map((user) => user.id === currentUserId && user.sellerDetails
+          ? { ...user, sellerDetails: { ...user.sellerDetails, published } }
+          : user),
+      }));
+      if (backendConnected) setWorkspaceRevision(value => value + 1);
+      notify(published ? "Provider profile published." : "Provider profile unpublished. Existing bookings are unchanged.");
+    } catch (error) {
+      notify(error instanceof Error ? error.message.replaceAll("_", " ") : "Publication update failed");
+    } finally { setBusy(false); }
+  }
+
   async function saveSellerProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -4285,6 +5064,7 @@ export default function NanasPortal({
     };
     const previousAvatarPath = sellerProfileForm.avatarPath;
     let cloudinaryUpload: UploadedImage | null = null;
+    let uploadedImageCleanupSafe = true;
     setBusy(true);
     try {
       if (photo instanceof File && photo.size > 0) {
@@ -4292,16 +5072,28 @@ export default function NanasPortal({
         cloudinaryUpload = await uploadImage(photo, "profile");
         next.avatarPath = cloudinaryUpload.assetRef;
       }
-      await syncCommand("seller_update_public_profile", {
-        display_name: next.displayName,
-        avatar_path: next.avatarPath,
-        headline: next.headline,
-        languages: next.languages,
-        island_id: next.islandId,
-        locality: next.locality,
-        vaccinations: next.vaccinations,
-        additional_details: next.additionalDetails,
-      });
+      try {
+        await syncCommand("seller_update_public_profile", {
+          display_name: next.displayName,
+          avatar_path: next.avatarPath,
+          headline: next.headline,
+          languages: next.languages,
+          island_id: next.islandId,
+          locality: next.locality,
+          vaccinations: next.vaccinations,
+          additional_details: next.additionalDetails,
+        });
+      } catch (saveError) {
+        // The database transaction may have committed even when its HTTP
+        // response was lost. Never delete the image now referenced by the
+        // authoritative profile; accepting the avatar also confirms the rest
+        // of this atomic profile update committed.
+        if (!cloudinaryUpload || !backendConnected) throw saveError;
+        const readback = await getSupabase()!.from("seller_profiles").select("avatar_path")
+          .eq("user_id", currentUserId).maybeSingle();
+        if (readback.error) uploadedImageCleanupSafe = false;
+        if (!uploadedProfileImageCommitted(cloudinaryUpload.assetRef, readback.data, readback.error)) throw saveError;
+      }
       const avatarUrl = cloudinaryUpload?.secureUrl ?? resolveProfileMediaUrl(next.avatarPath);
       setSellerProfileForm(next);
       setAuthIdentity((identity) =>
@@ -4337,12 +5129,12 @@ export default function NanasPortal({
         ),
       }));
       setModal(null);
-      notify("Public seller profile saved.");
+      notify("Public provider profile saved.");
       const previousCloudinaryAsset = parseCloudinaryAssetRef(previousAvatarPath);
       if (previousCloudinaryAsset && previousAvatarPath !== next.avatarPath)
         void deleteImage(previousCloudinaryAsset.publicId, "profile").catch(() => undefined);
     } catch (error) {
-      if (cloudinaryUpload)
+      if (cloudinaryUpload && uploadedImageCleanupSafe)
         void deleteImage(cloudinaryUpload.publicId, "profile").catch(() => undefined);
       notify(error instanceof Error ? error.message : "Profile update failed");
     } finally {
@@ -4371,7 +5163,7 @@ export default function NanasPortal({
           `coverage-${Date.now()}`,
         areaId,
         name:
-          liveAreas.find((item) => item.id === areaId)?.name ?? "The Bahamas",
+          existing?.name ?? liveAreas.find((item) => item.id === areaId)?.name ?? "Unavailable service area",
         radius,
         travelFee,
         active,
@@ -4381,7 +5173,7 @@ export default function NanasPortal({
         row,
       ]);
       setModal(null);
-      notify("Seller coverage saved.");
+      notify("Provider coverage saved.");
     } catch (error) {
       notify(error instanceof Error ? error.message : "Coverage update failed");
     }
@@ -4403,29 +5195,27 @@ export default function NanasPortal({
   ];
   const overlays = (
     <>
-      {toast && (
-        <div className="portal-toast">
-          <Check />
-          {toast}
+      {demoMode && !demoStateHydrated && (
+        <div className="portal-demo-loading" role="status" aria-busy="true">
+          <span className="portal-demo-loading-mark">N</span>
+          <strong className="portal-demo-loading-title">Loading your local Nanas workspace…</strong>
+          <p>Restoring the latest requests, bookings, messages, and visit records.</p>
+        </div>
+      )}
+      {toast && !modal && (
+        <div className={`portal-toast ${toastIsError ? "portal-toast-error" : ""}`} role={toastIsError ? "alert" : "status"}>
+          {toastIsError ? <Ban /> : <Check />}
+          <span>{toast}</span>
+          {toastIsError && <button type="button" aria-label="Dismiss error" onClick={() => setToast(null)}><X /></button>}
         </div>
       )}
       {modal && (
-        <dialog
-          open
+        <WorkflowDialog
           className="portal-modal-backdrop"
-          role="presentation"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) setModal(null);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") setModal(null);
-          }}
+          onClose={() => setModal(null)}
         >
           <div
             className={`portal-modal ${modal === "request" ? "request-wizard-modal" : ""}`}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Nanas workflow dialog"
           >
             <button
               className="modal-x"
@@ -4434,9 +5224,10 @@ export default function NanasPortal({
             >
               <X />
             </button>
+            {toast && <div className="portal-modal-notice" role={toastIsError ? "alert" : "status"}>{toast}{toastIsError && <button type="button" className="notice-dismiss" onClick={() => setToast(null)}>Dismiss error</button>}</div>}
             {renderModal()}
           </div>
-        </dialog>
+        </WorkflowDialog>
       )}
     </>
   );
@@ -4453,7 +5244,7 @@ export default function NanasPortal({
               chooseSection("overview");
             }}
           >
-            <span>N</span>Nanas<small>Healthcare at home</small>
+            <span>N</span>Nanas<small>Care close to home</small>
           </Link>
           <nav className="buyer-primary-nav" aria-label="Buyer navigation">
             {buyerNav.map((item) => (
@@ -4499,7 +5290,7 @@ export default function NanasPortal({
               aria-label={`${unread} unread notifications`}
             >
               <Bell />
-              {unread > 0 && <span>{unread}</span>}
+              {unread > 0 && <span>{unread > 99 ? "99+" : unread}</span>}
             </button>
             <Link
               className={
@@ -4550,7 +5341,7 @@ export default function NanasPortal({
             </details>
           </div>
         </header>
-        <main className="buyer-content">{renderBuyer()}</main>
+        <main className="buyer-content">{simulationAllowed && <div className="info-banner" role="status"><ShieldCheck /><div><b>QA payment simulation enabled</b><span>Only enrolled test accounts can accept quotes here. No real money is charged or paid out.</span></div></div>}{favoritesLoadError && <div role="alert"><p>{favoritesLoadError}</p><button onClick={() => setWorkspaceRevision(value => value + 1)}>Refresh saved providers</button></div>}{renderBuyer()}</main>
         <nav className="buyer-mobile-nav" aria-label="Mobile buyer navigation">
           {buyerNav.slice(0, 5).map((item) => (
             <Link
@@ -4583,9 +5374,9 @@ export default function NanasPortal({
               chooseSection("overview");
             }}
           >
-            <span>N</span>Nanas<small>Seller workspace</small>
+            <span>N</span>Nanas<small>Provider workspace</small>
           </Link>
-          <nav className="buyer-primary-nav" aria-label="Seller navigation">
+          <nav className="buyer-primary-nav" aria-label="Provider navigation">
             {sellerNav.map((item) => (
               <Link
                 key={item.id}
@@ -4630,7 +5421,7 @@ export default function NanasPortal({
               aria-label={`${unread} unread notifications`}
             >
               <Bell />
-              {unread > 0 && <span>{unread}</span>}
+              {unread > 0 && <span>{unread > 99 ? "99+" : unread}</span>}
             </button>
             <details className="seller-profile-menu">
               <summary
@@ -4648,7 +5439,7 @@ export default function NanasPortal({
                 >{currentUser.avatarUrl ? null : currentUser.avatar}</span>
                 <div>
                   <b>{currentUser.name}</b>
-                  <small>Seller account</small>
+                  <small>Provider account</small>
                 </div>
                 <ChevronDown />
               </summary>
@@ -4703,6 +5494,12 @@ export default function NanasPortal({
                   <Settings />
                   <span>Settings</span>
                 </Link>
+                <Link href={portalHref("seller", "earnings")} onClick={(event) => { event.preventDefault(); chooseSection("earnings"); }}>
+                  <WalletCards /><span>Earnings</span>
+                </Link>
+                <Link href={portalHref("seller", "badges")} onClick={(event) => { event.preventDefault(); chooseSection("badges"); }}>
+                  <Star /><span>Badges & reviews</span>
+                </Link>
                 <Link
                   href={portalHref("seller", "safety")}
                   onClick={(event) => {
@@ -4716,7 +5513,7 @@ export default function NanasPortal({
               </div>
             </details>
             <details className="app-mobile-menu">
-              <summary aria-label="Open seller menu">
+              <summary aria-label="Open provider menu">
                 <Menu />
               </summary>
               <div className="app-mobile-menu-panel">
@@ -4753,7 +5550,7 @@ export default function NanasPortal({
           </div>
         </header>
         <main className="buyer-content seller-content">{renderSeller()}</main>
-        <nav className="buyer-mobile-nav" aria-label="Mobile seller navigation">
+        <nav className="buyer-mobile-nav" aria-label="Mobile provider navigation">
           {sellerNav.map((item) => (
             <Link
               key={item.id}
@@ -4806,6 +5603,9 @@ export default function NanasPortal({
             </Link>
           ))}
         </nav>
+        <button className="admin-sign-out secondary-action" onClick={signOut}>
+          Sign out
+        </button>
         <div className="sidebar-support">
           <LifeBuoy />
           <div>
@@ -4830,10 +5630,18 @@ export default function NanasPortal({
           >
             <Menu />
           </button>
-          <div className="portal-search">
+          <form className="portal-search" onSubmit={(event) => {
+            event.preventDefault();
+            const query = String(new FormData(event.currentTarget).get("sectionSearch") ?? "").trim().toLowerCase();
+            const match = nav.find((item) => item.label.toLowerCase() === query || item.id === query) ?? nav.find((item) => query && item.label.toLowerCase().includes(query));
+            if (!match) { notify("No matching admin section. Choose a section from the menu."); return; }
+            event.currentTarget.reset();
+            chooseSection(match.id);
+          }}>
             <Search />
-            <input placeholder="Search Nanas" aria-label="Search Nanas" />
-          </div>
+            <input name="sectionSearch" list="admin-section-options" placeholder="Go to admin section" aria-label="Search admin sections" required />
+            <datalist id="admin-section-options">{nav.map((item) => <option key={item.id} value={item.label} />)}</datalist>
+          </form>
           {role === "admin" && (
             <button
               className="workspace-header-cta"
@@ -4854,7 +5662,7 @@ export default function NanasPortal({
             aria-label={`${unread} unread notifications`}
           >
             <Bell />
-            {unread > 0 && <span>{unread}</span>}
+            {unread > 0 && <span>{unread > 99 ? "99+" : unread}</span>}
           </button>
           <div className="role-switch" aria-label="Test Nanas as a role">
             {(backendConnected
@@ -5056,8 +5864,12 @@ export default function NanasPortal({
         {pageHead(
           "Account & privacy",
           "Security and data controls.",
-          "Manage notification preferences, contact security, active devices, exports, and deletion requests with step-up checks in connected mode.",
+          "Manage notification preferences, sign out of this browser, and request a data export or account deletion review.",
         )}
+        <div className="account-workflow-links">
+          <Link href={portalHref(role, role === "seller" ? "earnings" : "wallet")} onClick={(event) => { event.preventDefault(); chooseSection(role === "seller" ? "earnings" : "wallet"); }}><WalletCards />Payments & earnings</Link>
+          <Link href={portalHref(role, role === "seller" ? "badges" : "reviews")} onClick={(event) => { event.preventDefault(); chooseSection(role === "seller" ? "badges" : "reviews"); }}><Star />Verified reviews</Link>
+        </div>
         <div className="settings-grid">
           {[
             "Booking updates",
@@ -5082,18 +5894,8 @@ export default function NanasPortal({
                   index === 4 ||
                   notificationPreferences[currentUserId]?.[name] !== false
                 }
-                onChange={(event) => {
-                  const checked = event.target.checked;
-                  setNotificationPreferences((previous) => ({
-                    ...previous,
-                    [currentUserId]: {
-                      ...previous[currentUserId],
-                      [name]: checked,
-                    },
-                  }));
-                  notify(`${name} preference saved.`);
-                }}
-                disabled={index === 4}
+                onChange={(event) => void saveNotificationPreference(name, event.target.checked)}
+                disabled={index === 4 || !preferencesHydrated || savingNotificationPreference}
               />
             </div>
           ))}
@@ -5104,11 +5906,10 @@ export default function NanasPortal({
             action={<button onClick={signOut}>Sign out</button>}
           >
             <TaskList
-              items={[
-                "Contact verified",
-                "Password protected",
-                "1 active web device",
-                "Step-up required for sensitive changes",
+              items={demoMode ? ["Demo account — no live session", "Security settings are illustrative"] : [
+                "Signed in with Supabase Auth",
+                "Sign out ends this browser session",
+                "Device inventory and additional verification are not available here yet",
               ]}
             />
           </Panel>
@@ -5123,7 +5924,7 @@ export default function NanasPortal({
             <div className="privacy-actions">
               <button onClick={() => createPrivacyRequest("export")}>
                 <BookOpenCheck />
-                Export my data
+                Request data export
               </button>
               <button
                 className="danger"
@@ -5148,32 +5949,39 @@ export default function NanasPortal({
   }
 
   function renderBuyer() {
+    if (directoryLoadError && ["find-care", "providers", "favorites"].includes(section)) return <div className="empty-state" role="alert"><h1>Provider directory could not be loaded.</h1><p>Please refresh to see current profiles. Your saved bookmarks have not been removed.</p><button className="secondary-action" onClick={() => setWorkspaceRevision(value => value + 1)}>Retry provider directory</button></div>;
     if (section === "providers") {
       const sellerId = selected ?? routeEntityId;
       const seller = state.users.find(
         (item) =>
           item.id === sellerId &&
           item.role === "seller" &&
-          item.status === "active",
+          item.status === "active" &&
+          isDiscoverableProvider(item),
       );
-      if (!seller)
+      if (!seller) {
+        if (demoMode && !demoStateHydrated) return <p role="status">Loading requested page…</p>;
         return (
-          <DetailNotFound backHref="/app/buyer/find-care">
-            This seller may be unavailable, outside your eligible area, or no
-            longer accepting public healthcare requests.
+          <DetailNotFound backHref={portalHref("buyer", "find-care")}>
+            This provider may be unavailable or no longer accepting public care requests.
           </DetailNotFound>
         );
+      }
       return (
         <NanasProviderProfile
           seller={seller}
+          backHref={portalHref("buyer", "find-care")}
+          querySuffix={demoMode ? "?demo=1" : ""}
           relatedSellers={state.users.filter(
             (item) =>
               item.role === "seller" &&
               item.status === "active" &&
+              isDiscoverableProvider(item) &&
               item.id !== seller.id,
           )}
           favorite={state.favorites.includes(seller.id)}
           onToggleFavorite={() => toggleFavorite(seller.id)}
+          favoriteBusy={!favoritesLoaded || !!favoritesLoadError || favoritePending.includes(seller.id)}
           onRequestCare={(sellerServiceId) =>
             openRequestWizard(sellerServiceId)
           }
@@ -5184,17 +5992,20 @@ export default function NanasPortal({
       const request = myRequests.find(
         (item) => item.id === (selected ?? routeEntityId),
       );
-      if (!request)
+      if (!request) {
+        if (demoMode && !demoStateHydrated) return <p role="status">Loading requested page…</p>;
         return (
-          <DetailNotFound backHref="/app/buyer/care-requests">
+          <DetailNotFound backHref={portalHref("buyer", "care-requests")}>
             This care request was not found or is no longer available to this
             buyer account.
           </DetailNotFound>
         );
+      }
       return (
         <NanasCareRequestDetail
           request={request}
           viewer="buyer"
+          querySuffix={demoMode ? "?demo=1" : ""}
           currentUserId={currentUserId}
           busy={busy}
           onSubmitQuote={submitQuote}
@@ -5217,12 +6028,12 @@ export default function NanasPortal({
           <section className="buyer-hero">
             <div className="buyer-hero-copy">
               <span className="buyer-eyebrow">
-                <Sparkles /> Trusted healthcare across The Bahamas
+                <Sparkles /> Trusted care and household help across The Bahamas
               </span>
               <h1>What care would make today easier?</h1>
               <p>
                 Tell Nanas what your family needs. We’ll help you compare
-                approved healthcare sellers and book with confidence.
+                approved providers and book with confidence.
               </p>
               <div className="buyer-hero-actions">
                 <button
@@ -5235,7 +6046,7 @@ export default function NanasPortal({
                   className="buyer-quiet-action"
                   onClick={() => setSection("find-care")}
                 >
-                  <Search /> Browse sellers
+                  <Search /> Browse providers
                 </button>
               </div>
               <div className="buyer-trust-line">
@@ -5253,7 +6064,7 @@ export default function NanasPortal({
             <div className="buyer-hero-card">
               <Image
                 src="/nanas/provider-home-care.png"
-                alt="A Nanas healthcare seller supporting an older adult at home"
+                alt="A Nanas care provider supporting an older adult at home"
                 fill
                 sizes="(max-width: 820px) 0px, 34vw"
                 priority
@@ -5318,7 +6129,7 @@ export default function NanasPortal({
             <ChevronRight />
             <div>
               <span>2</span>
-              <b>Compare approved sellers</b>
+              <b>Compare approved providers</b>
               <small>See services, rates and verified reviews.</small>
             </div>
             <ChevronRight />
@@ -5388,30 +6199,10 @@ export default function NanasPortal({
         </div>
       );
     if (section === "find-care") {
-      const publicReadySeller = (user: DemoState["users"][number]) => {
-        const details = user.sellerDetails;
-        return Boolean(
-          user.role === "seller" &&
-            user.status === "active" &&
-            details &&
-            details.services.some(
-              (service) =>
-                service.id &&
-                service.name &&
-                (service.bio?.trim().length ?? 0) >= 40,
-            ) &&
-            Boolean(details.locality || details.island) &&
-            ((details.credentials?.length ?? 0) > 0 ||
-              (details.safetyChecks ?? []).some(
-                (check) =>
-                  check.status === "approved" || check.status === "completed",
-              )),
-        );
-      };
       const approvedSellers = (backendConnected && !marketplaceLoaded
         ? []
         : state.users
-      ).filter(publicReadySeller);
+      ).filter(isDiscoverableProvider);
       const availableServices = [
         ...new Set([
           ...liveServices.map((service) => service.name),
@@ -5660,9 +6451,9 @@ export default function NanasPortal({
       return (
         <>
           {pageHead(
-            "Find healthcare",
-            "Meet care sellers who fit your family.",
-            "Advanced healthcare seller filters help you search approved individual sellers across The Bahamas, then review the details that matter.",
+            "Find care",
+            "Meet care providers who fit your family.",
+            "Advanced provider filters help you search approved individual providers across The Bahamas, then review the details that matter.",
             <button
               className="primary-action"
               onClick={() => openRequestWizard()}
@@ -5676,7 +6467,7 @@ export default function NanasPortal({
               <span>
                 <small>Smart search · Beta</small>
                 <input
-                  aria-label="Smart search healthcare sellers"
+                  aria-label="Smart search providers"
                   value={discoveryQuery}
                   onChange={(event) => setDiscoveryQuery(event.target.value)}
                   placeholder="Meal prep, wound care, companionship"
@@ -5688,11 +6479,11 @@ export default function NanasPortal({
               <span>
                 <small>Care type</small>
                 <select
-                  aria-label="Filter sellers by service"
+                  aria-label="Filter providers by service"
                   value={discoveryService}
                   onChange={(event) => setDiscoveryService(event.target.value)}
                 >
-                  <option value="all">All healthcare services</option>
+                  <option value="all">All care and household services</option>
                   {availableServices.map((service) => (
                     <option key={service}>{service}</option>
                   ))}
@@ -5704,7 +6495,7 @@ export default function NanasPortal({
               <span>
                 <small>Sort by</small>
                 <select
-                  aria-label="Sort healthcare sellers"
+                  aria-label="Sort providers"
                   value={discoverySort}
                   onChange={(event) => setDiscoverySort(event.target.value)}
                 >
@@ -5715,13 +6506,13 @@ export default function NanasPortal({
                 </select>
               </span>
             </label>
-            <button aria-label="Search sellers">
+            <button aria-label="Search providers">
               <Search />
             </button>
           </div>
           <div
             className="buyer-filter-toolbar"
-            aria-label="Healthcare seller filters"
+            aria-label="Provider filters"
           >
             <button
               className={discoveryAdvancedOpen ? "active" : ""}
@@ -5774,7 +6565,7 @@ export default function NanasPortal({
           {discoveryAdvancedOpen && (
             <section
               className="buyer-filter-drawer"
-              aria-label="Advanced healthcare seller filters"
+              aria-label="Advanced provider filters"
             >
               <header>
                 <div>
@@ -5782,7 +6573,7 @@ export default function NanasPortal({
                   <span>
                     <b>Advanced filters</b>
                     <small>
-                      Every option updates the approved seller results
+                      Every option updates the approved provider results
                       immediately.
                     </small>
                   </span>
@@ -5822,7 +6613,7 @@ export default function NanasPortal({
                     <label>
                       First name
                       <input
-                        aria-label="Seller first name"
+                        aria-label="Provider first name"
                         value={discoveryFirstName}
                         onChange={(event) =>
                           setDiscoveryFirstName(event.target.value)
@@ -5833,7 +6624,7 @@ export default function NanasPortal({
                     <label>
                       Last initial
                       <input
-                        aria-label="Seller last initial"
+                        aria-label="Provider last initial"
                         value={discoveryLastInitial}
                         maxLength={1}
                         onChange={(event) =>
@@ -5894,7 +6685,7 @@ export default function NanasPortal({
                 </fieldset>
                 <fieldset className="filter-section">
                   <legend>Employment type</legend>
-                  <p>Based on the seller’s published weekly availability.</p>
+                  <p>Based on the provider’s published weekly availability.</p>
                   <div className="filter-check-list">
                     {[
                       ["part_time", "Part time", "Less than 30 hours/week"],
@@ -5923,7 +6714,7 @@ export default function NanasPortal({
                 </fieldset>
                 <fieldset className="filter-section">
                   <legend>Years of experience</legend>
-                  <p>Experience for the selected healthcare service.</p>
+                  <p>Experience for the selected care or household service.</p>
                   <label className="filter-select-label">
                     <select
                       aria-label="Minimum years of experience"
@@ -5992,7 +6783,7 @@ export default function NanasPortal({
                 </fieldset>
                 <fieldset className="filter-section filter-wide">
                   <legend>Preferences</legend>
-                  <p>Public details sellers have chosen to share.</p>
+                  <p>Public details providers have chosen to share.</p>
                   <div className="filter-option-grid">
                     {preferenceOptions.map((preference) => (
                       <label key={preference}>
@@ -6014,7 +6805,7 @@ export default function NanasPortal({
                 </fieldset>
                 <fieldset className="filter-section filter-languages filter-wide">
                   <legend>Languages spoken</legend>
-                  <p>Select one or more languages the seller must speak.</p>
+                  <p>Select one or more languages the provider must speak.</p>
                   <label className="filter-text-input">
                     <Search />
                     <input
@@ -6060,7 +6851,7 @@ export default function NanasPortal({
                   type="button"
                   onClick={() => setDiscoveryAdvancedOpen(false)}
                 >
-                  Show {visibleSellers.length} seller
+                  Show {visibleSellers.length} provider
                   {visibleSellers.length === 1 ? "" : "s"}
                 </button>
               </footer>
@@ -6072,7 +6863,7 @@ export default function NanasPortal({
                 <MapPin /> Area
               </span>
               <select
-                aria-label="Filter sellers by area"
+                aria-label="Filter providers by area"
                 value={discoveryArea}
                 onChange={(event) => setDiscoveryArea(event.target.value)}
               >
@@ -6087,24 +6878,33 @@ export default function NanasPortal({
                 <Stethoscope /> Care service
               </span>
               <select
-                aria-label="Quick filter sellers by service"
+                aria-label="Quick filter providers by service"
                 value={discoveryService}
                 onChange={(event) => setDiscoveryService(event.target.value)}
               >
-                <option value="all">All healthcare services</option>
+                <option value="all">All care and household services</option>
                 {availableServices.map((service) => (
                   <option key={service}>{service}</option>
                 ))}
               </select>
             </label>
-            <button
-              type="button"
-              onClick={() =>
-                notify("Search saved locally for this Nanas beta session.")
-              }
-            >
-              Save search
-            </button>
+            <button type="button" onClick={() => {
+              try {
+                localStorage.setItem("nanas-saved-search-v1", JSON.stringify({ query: discoveryQuery, service: discoveryService, area: discoveryArea, sort: discoverySort, minRate: discoveryMinRate, maxRate: discoveryMaxRate, minRating: discoveryMinRating, minYears: discoveryMinYears, firstName: discoveryFirstName, lastInitial: discoveryLastInitial, employment: discoveryEmployment, skills: discoverySkills, preferences: discoveryPreferences, languages: discoveryLanguages }));
+                notify("Search saved on this device.");
+              } catch { notify("This browser could not save the search."); }
+            }}>Save search</button>
+            <button type="button" onClick={() => {
+              try {
+                const raw = localStorage.getItem("nanas-saved-search-v1");
+                if (!raw) return notify("Save a search first.");
+                const saved = JSON.parse(raw);
+                setDiscoveryQuery(saved.query ?? ""); setDiscoveryService(saved.service ?? "all"); setDiscoveryArea(saved.area ?? "all"); setDiscoverySort(saved.sort ?? "recommended");
+                setDiscoveryMinRate(saved.minRate ?? 0); setDiscoveryMaxRate(saved.maxRate ?? 0); setDiscoveryMinRating(saved.minRating ?? 0); setDiscoveryMinYears(saved.minYears ?? 0);
+                setDiscoveryFirstName(saved.firstName ?? ""); setDiscoveryLastInitial(saved.lastInitial ?? ""); setDiscoveryEmployment(saved.employment ?? []); setDiscoverySkills(saved.skills ?? []); setDiscoveryPreferences(saved.preferences ?? []); setDiscoveryLanguages(saved.languages ?? []);
+                notify("Saved search restored.");
+              } catch { notify("The saved search could not be restored."); }
+            }}>Load saved search</button>
             <button
               type="button"
               onClick={resetDiscovery}
@@ -6115,7 +6915,7 @@ export default function NanasPortal({
           </div>
           <div className="buyer-filter-chips">
             <button className="active">
-              <BadgeCheck /> Approved sellers
+              <BadgeCheck /> Approved providers
             </button>
             <button className="active">
               <ShieldCheck /> Credentials reviewed
@@ -6146,7 +6946,7 @@ export default function NanasPortal({
             </button>
             <span>
               <b>{visibleSellers.length}</b> of {approvedSellers.length}{" "}
-              approved seller{approvedSellers.length === 1 ? "" : "s"}
+              approved provider{approvedSellers.length === 1 ? "" : "s"}
             </span>
           </div>
           <div className="buyer-discovery-layout care-style-layout">
@@ -6159,24 +6959,25 @@ export default function NanasPortal({
                   favorite={state.favorites.includes(seller.id)}
                   onFocus={() => setFocusedSellerId(seller.id)}
                   onFavorite={() => toggleFavorite(seller.id)}
+                  favoriteBusy={!favoritesLoaded || !!favoritesLoadError || favoritePending.includes(seller.id)}
                   preferredServiceName={
                     discoveryService === "all" ? undefined : discoveryService
                   }
-                  profileHref={"/app/buyer/providers/" + seller.id}
+                  profileHref={portalHref("buyer", `providers/${seller.id}`)}
                   onProfile={() => {
                     setSelected(seller.id);
-                    setSection("providers");
+                    setSection("providers", seller.id);
                   }}
                 />
               ))}
               {backendConnected && !marketplaceLoaded
                 ? empty(
-                    "Loading verified sellers",
-                    "Checking live profile, service, coverage, and KYC status before showing sellers.",
+                    "Loading verified providers",
+                    "Checking live profile, service, coverage, and KYC status before showing providers.",
                   )
                 : !visibleSellers.length &&
                 empty(
-                  "No sellers match those filters",
+                  "No providers match those filters",
                   "Try another area, rate, rating, or care type—or post a request so Nanas can surface eligible matches.",
                 )}
             </div>
@@ -6186,14 +6987,15 @@ export default function NanasPortal({
                 seller={focusedSeller}
                 favorite={state.favorites.includes(focusedSeller.id)}
                 onFavorite={() => toggleFavorite(focusedSeller.id)}
+                favoriteBusy={!favoritesLoaded || !!favoritesLoadError || favoritePending.includes(focusedSeller.id)}
                 onRequest={(serviceId) => openRequestWizard(serviceId)}
                 preferredServiceName={
                   discoveryService === "all" ? undefined : discoveryService
                 }
-                profileHref={"/app/buyer/providers/" + focusedSeller.id}
+                profileHref={portalHref("buyer", `providers/${focusedSeller.id}`)}
                 onProfile={() => {
                   setSelected(focusedSeller.id);
-                  setSection("providers");
+                  setSection("providers", focusedSeller.id);
                 }}
               />
             )}
@@ -6206,8 +7008,8 @@ export default function NanasPortal({
         <>
           {pageHead(
             "Care requests",
-            "Your healthcare needs, clearly posted.",
-            "Track seller interest, quotes, and booking status.",
+            "Your care and household needs, clearly posted.",
+            "Track provider interest, quotes, and booking status.",
             <button
               className="primary-action"
               onClick={() => openRequestWizard()}
@@ -6224,9 +7026,9 @@ export default function NanasPortal({
       return (
         <>
           {pageHead(
-            "Seller quotes",
+            "Provider quotes",
             "Compare care, not guesswork.",
-            "Review verified sellers, rate breakdowns, and messages before simulating payment.",
+            "Review verified providers, rate breakdowns, and messages before simulating payment.",
           )}
           <div className="quote-grid">
             {myQuotes.length
@@ -6240,7 +7042,7 @@ export default function NanasPortal({
                 ))
               : empty(
                   "No quotes yet",
-                  "Sellers will appear here when they respond to your care requests.",
+                  "Providers will appear here when they respond to your care requests.",
                 )}
           </div>
         </>
@@ -6269,15 +7071,16 @@ export default function NanasPortal({
           )}
           <div className="wallet-hero">
             <div>
-              <span>Simulated buyer balance</span>
-              <strong>{money(wallet)}</strong>
-              <small>Completed and protected booking payments</small>
+              <span>{backendConnected ? "Wallet credits" : "Simulated buyer balance"}</span>
+              <strong>{backendConnected && !financeRecords.loaded ? "Loading…" : financeRecords.error ? "Unavailable" : money(wallet)}</strong>
+              <small>{backendConnected ? "BSD · Recorded credits less debits, not your total spending" : "Completed and protected booking payments"}</small>
             </div>
             <WalletCards />
           </div>
-          <Panel title="Transaction history">
+          {backendConnected && <button className="secondary-action financial-refresh" disabled={!financeRecords.loaded} onClick={() => setSection("wallet")}>Refresh financial records</button>}
+          {backendConnected ? renderFinancialRecords("buyer") : <Panel title="Transaction history">
             <TransactionRows bookings={myBookings} perspective="buyer" />
-          </Panel>
+          </Panel>}
         </>
       );
     if (section === "reviews")
@@ -6286,36 +7089,9 @@ export default function NanasPortal({
           {pageHead(
             "Verified reviews",
             "Feedback tied to completed care.",
-            "Reviews publish under the double-blind rules in the PRD.",
+            "Reviews stay private until both parties submit, or seven days after the booking is completed.",
           )}
-          <div className="review-grid">
-            {myBookings
-              .filter((b) => b.status === "completed")
-              .map((b) => (
-                <article className="review-card" key={b.id}>
-                  <Star />
-                  <h3>
-                    {b.service} with {b.sellerName}
-                  </h3>
-                  <p>
-                    {b.reviewedBy.includes(currentUserId)
-                      ? "Your review was submitted and will publish under the review window rules."
-                      : "This completed booking is eligible for one verified review."}
-                  </p>
-                  <button
-                    disabled={b.reviewedBy.includes(currentUserId)}
-                    onClick={() => {
-                      setSelected(b.id);
-                      setModal("review");
-                    }}
-                  >
-                    {b.reviewedBy.includes(currentUserId)
-                      ? "Review submitted"
-                      : "Leave verified review"}
-                  </button>
-                </article>
-              ))}
-          </div>
+          {renderBookingReviews()}
         </>
       );
     if (section === "favorites") {
@@ -6323,17 +7099,21 @@ export default function NanasPortal({
         (user) =>
           user.role === "seller" &&
           user.status === "active" &&
+          isDiscoverableProvider(user) &&
           state.favorites.includes(user.id),
       );
+      const unavailableFavorites = state.favorites.filter(id => !favoriteSellers.some(seller => seller.id === id));
       return (
         <>
           {pageHead(
-            "Favorite sellers",
+            "My Nanas",
             "Care relationships worth returning to.",
-            "Favorites are private and blocked pairs never appear in matching.",
+            "Your private saved-provider list. Saving someone is not a booking or a verification badge.",
           )}
+          <button className="secondary-action" disabled={!favoritesLoaded || favoritePending.length > 0} onClick={() => setWorkspaceRevision(value => value + 1)}>Refresh saved providers</button>
+          {!favoritesLoaded && <p role="status">Loading saved providers…</p>}
           <div className="favorite-seller-grid">
-            {favoriteSellers.map((seller) => (
+            {favoritesLoaded && !favoritesLoadError && favoriteSellers.map((seller) => (
               <div className="favorite-seller-item" key={seller.id}>
                 <CareSellerResultCard
                   seller={seller}
@@ -6341,28 +7121,30 @@ export default function NanasPortal({
                   favorite
                   onFocus={() => {
                     setSelected(seller.id);
-                    setSection("providers");
+                    setSection("providers", seller.id);
                   }}
                   onFavorite={() => toggleFavorite(seller.id)}
+                  favoriteBusy={favoritePending.includes(seller.id)}
                   preferredServiceName={seller.sellerDetails?.services[0]?.name}
-                  profileHref={`/app/buyer/providers/${seller.id}`}
+                  profileHref={portalHref("buyer", `providers/${seller.id}`)}
                   onProfile={() => {
                     setSelected(seller.id);
-                    setSection("providers");
+                    setSection("providers", seller.id);
                   }}
                 />
                 <div className="favorite-seller-actions">
                   <span>
                     <BadgeCheck />
-                    <b>Saved approved seller</b>
+                    <b>Saved provider</b>
                     <small>
-                      {seller.sellerDetails?.services.length ?? 0} healthcare
+                      {seller.sellerDetails?.services.length ?? 0} service
                       profile
                       {seller.sellerDetails?.services.length === 1 ? "" : "s"}
                     </small>
                   </span>
                   <button
                     className="quiet"
+                    disabled={favoritePending.includes(seller.id)}
                     onClick={() => toggleFavorite(seller.id)}
                   >
                     <X /> Remove
@@ -6377,10 +7159,11 @@ export default function NanasPortal({
                 </div>
               </div>
             ))}
-            {!favoriteSellers.length &&
+            {favoritesLoaded && !favoritesLoadError && unavailableFavorites.map(id => <article className="unavailable-favorite" key={id}><h2>Saved provider currently unavailable</h2><p>This profile is not available in the current directory. You can keep the bookmark or remove it.</p><button disabled={favoritePending.includes(id)} onClick={() => toggleFavorite(id)}>{favoritePending.includes(id) ? "Removing…" : "Remove unavailable provider"}</button></article>)}
+            {favoritesLoaded && !favoritesLoadError && !state.favorites.length &&
               empty(
-                "No saved sellers yet",
-                "Save approved sellers from Find care so you can return to their full healthcare profiles here.",
+                "No saved providers yet",
+                "Save providers from Find care so you can return to their profiles here.",
               )}
           </div>
         </>
@@ -6433,13 +7216,28 @@ export default function NanasPortal({
               "No care recipients",
               "Add the person who will receive care; details remain private.",
             )}
+          <div className="section-heading-row">
+            <div><h2>Emergency contacts</h2><p>Optional private contacts for care bookings.</p></div>
+            <button className="secondary-action" onClick={() => { setSelected(null); setModal("emergency-contact"); }}>Add emergency contact</button>
+          </div>
+          {emergencyContacts.map((contact) => (
+            <div className="care-recipient-card emergency-contact-card" key={contact.id}>
+              <div className="recipient-avatar">SOS</div>
+              <div><span>{contact.relationship} · priority {contact.priority}</span><h3>{contact.name}</h3><p>{contact.phone}</p></div>
+              {status(contact.consentConfirmed ? "consent active" : "consent revoked")}
+              <div className="inline-actions">
+                <button onClick={() => { setSelected(contact.id); setModal("emergency-contact"); }}>Edit</button>
+                {contact.consentConfirmed && <button className="danger" onClick={() => revokeEmergencyContact(contact.id)}>Revoke consent</button>}
+              </div>
+            </div>
+          ))}
+          {!emergencyContacts.length && empty("No emergency contacts", "Add an optional contact, then choose them while posting a care request.")}
           <div className="info-banner">
             <ShieldCheck />
             <div>
               <b>Exact addresses and private care notes are never public.</b>
               <span>
-                Sellers receive only the minimum details needed after an
-                eligible booking is confirmed.
+                Providers receive only the minimum details needed during an eligible active booking. Emergency-contact access is audited; Nanas is not an emergency service.
               </span>
             </div>
           </div>
@@ -6454,7 +7252,7 @@ export default function NanasPortal({
     const sellerProfilePhotoUrl =
       resolveProfileMediaUrl(sellerProfileForm.avatarPath) ?? currentUser.avatarUrl;
     const sellerVerificationApproved = state.kyc.some(
-      (item) => item.sellerId === currentUserId && item.status === "approved",
+      (item) => item.sellerId === currentUserId && item.status === "approved" && !item.type.startsWith("service_credential:"),
     );
     const sellerProfileComplete = Boolean(
       sellerProfileForm.displayName.trim() &&
@@ -6466,14 +7264,29 @@ export default function NanasPortal({
       (service) =>
         service.active &&
         service.rate > 0 &&
-        (service.bio?.trim().length ?? 0) >= 40,
+        (service.bio?.trim().length ?? 0) >= 180 && service.capabilities.length > 0,
     );
     const sellerHasCoverage = sellerCoverageRows.some((area) => area.active);
-    const sellerPublicReady =
+    const sellerCompletion = Math.round([
+      sellerProfileForm.displayName.trim(), sellerProfileForm.headline.trim(),
+      sellerProfileForm.languages.length > 0, sellerProfileForm.locality.trim(),
+      sellerProfileForm.islandId, sellerProfileForm.additionalDetails.length > 0,
+      sellerHasPublicService, availabilityRows.some((rule) => rule.active),
+      sellerHasCoverage, sellerVerificationApproved,
+    ].filter(Boolean).length * 10);
+    const approvalLabel: Record<string, string> = {
+      loading: "Loading approval status", draft: "Profile not yet submitted",
+      submitted: "Application submitted", under_review: "Application under review",
+      needs_information: "More information needed", approved: "Approved to provide care",
+      rejected: "Application not approved", paused: "Provider profile paused", suspended: "Provider account suspended",
+    };
+    const sellerReadyToPublish =
+      sellerApprovalStatus === "approved" &&
       sellerProfileComplete &&
       sellerHasPublicService &&
       sellerHasCoverage &&
-      sellerVerificationApproved;
+      sellerVerificationApproved && availabilityRows.some((rule) => rule.active);
+    const sellerPublicReady = sellerReadyToPublish && sellerPublishedAt !== null;
     const sellerLockItems = [
       {
         label: "Complete public profile",
@@ -6499,26 +7312,31 @@ export default function NanasPortal({
         action: "Upload KYC",
         target: "kyc",
       },
+      { label: "Publish your profile", done: sellerPublishedAt !== null, action: "Manage publication", target: "profile" },
     ] as const;
     const sellerWorkspaceLoading = backendConnected && !sellerWorkspaceLoaded;
     const visibleSellerServiceRows = sellerWorkspaceLoading
       ? []
       : sellerServiceRows;
     if (section === "requests" && (selected ?? routeEntityId)) {
-      const request = openRequests.find(
+      if (backendConnected && !providerFeedReady && !providerFeedError) return <p role="status">Loading matching request…</p>;
+      const request = (backendConnected ? connectedFeedRequests : sellerEligibleRequests).find(
         (item) => item.id === (selected ?? routeEntityId),
       );
-      if (!request)
+      if (!request) {
+        if (demoMode && !demoStateHydrated) return <p role="status">Loading matching request…</p>;
         return (
-          <DetailNotFound backHref="/app/seller/requests">
-            This care request is unavailable or no longer matches this seller’s
-            approved healthcare services and coverage.
+          <DetailNotFound backHref={portalHref("seller", "requests")}>
+            This care request is unavailable or no longer matches this provider’s
+            approved care and household services and coverage.
           </DetailNotFound>
         );
+      }
       return (
         <NanasCareRequestDetail
           request={request}
           viewer="seller"
+          querySuffix={demoMode ? "?demo=1" : ""}
           currentUserId={currentUserId}
           busy={busy}
           onSubmitQuote={submitQuote}
@@ -6535,7 +7353,7 @@ export default function NanasPortal({
           <section className="workspace-welcome seller-welcome">
             <div>
               <span>
-                <Sparkles /> Seller workspace
+                <Sparkles /> Provider workspace
               </span>
               <h1>Welcome back, {currentUser.name.split(" ")[0]}.</h1>
               <p>
@@ -6556,16 +7374,16 @@ export default function NanasPortal({
             </div>
             <aside>
               <BadgeCheck />
-              <b>Approved to provide care</b>
-              <small>Profile 92% complete</small>
-              <progress value="92" max="100" />
+              <b>{approvalLabel[sellerApprovalStatus] ?? "Approval status unavailable"}</b>
+              <small>Profile {sellerCompletion}% complete</small>
+              <progress value={sellerCompletion} max="100" />
             </aside>
           </section>
           <div className="metric-grid">
             {metric(
               <Search />,
               "Open requests",
-              String(sellerVisibleRequests.length),
+              backendConnected ? providerFeedReady ? String(providerFeed?.total ?? 0) : "—" : String(sellerVisibleRequests.length),
               "Matching approved services",
               "mint",
             )}
@@ -6581,7 +7399,7 @@ export default function NanasPortal({
               "Active bookings",
               String(
                 myBookings.filter(
-                  (b) => !["completed", "cancelled"].includes(b.status),
+                  (b) => ["confirmed", "in_progress", "completion_pending"].includes(b.status),
                 ).length,
               ),
               "Confirmed and in progress",
@@ -6589,9 +7407,9 @@ export default function NanasPortal({
             )}
             {metric(
               <CircleDollarSign />,
-              "Available earnings",
+              backendConnected ? "Recorded wallet" : "Available earnings",
               money(wallet),
-              "Simulated wallet balance",
+              backendConnected ? "Not a payout confirmation" : "Simulated wallet balance",
               "lilac",
             )}
           </div>
@@ -6604,17 +7422,17 @@ export default function NanasPortal({
                 </button>
               }
             >
-              <SellerJobCards
+              {backendConnected && !providerFeedReady ? <p role={providerFeedError ? "alert" : "status"}>{providerFeedError ?? "Loading matching requests…"}</p> : <SellerJobCards
                 requests={sellerVisibleRequests.slice(0, 3)}
                 compact
-              />
+              />}
             </Panel>
             <Panel title="Your next steps">
               <TaskList
                 items={[
                   `${myQuotes.filter((quote) => quote.status === "pending").length} quote(s) awaiting a buyer decision`,
                   `${myBookings.filter((booking) => booking.status === "confirmed").length} confirmed visit(s) to prepare for`,
-                  `${sellerServiceRows.filter((service) => service.active).length} approved service(s) visible to buyers`,
+                  `${sellerServiceRows.filter((service) => service.active).length} active service profile(s)${sellerApprovalStatus === "approved" ? "" : " awaiting provider approval"}`,
                 ]}
               />
             </Panel>
@@ -6626,11 +7444,18 @@ export default function NanasPortal({
         <>
           {pageHead(
             "Care request marketplace",
-            "Healthcare requests that match you.",
-            "Open a complete AnyJob-style care brief before deciding whether to quote. Exact addresses remain private.",
+            "Care requests that match you.",
+            "Review each care request before deciding whether to quote. Exact addresses remain private.",
           )}
-          <SellerJobFilters total={openRequests.length} />
-          <SellerJobCards requests={sellerVisibleRequests} />
+          {SellerJobFilters({ total: backendConnected ? providerFeed?.total ?? 0 : sellerEligibleRequests.length })}
+          <p>Recommended shows featured requests first, then newest. Other sort options use only the selected order.</p>
+          <button className="provider-feed-refresh" onClick={() => setWorkspaceRevision(value => value + 1)}>Refresh matching requests</button>
+          {backendConnected && !providerFeedReady ? <p role={providerFeedError ? "alert" : "status"}>{providerFeedError ?? "Loading matching requests…"}</p> : <SellerJobCards requests={sellerVisibleRequests} />}
+          {backendConnected && providerFeedReady && <nav aria-label="Matching request pages" className="provider-feed-pages">
+            <button className="ghost" disabled={sellerJobPage === 0} onClick={() => setSellerJobPage(page => page - 1)}>Previous requests</button>
+            <span>Page {sellerJobPage + 1} of {Math.max(1, Math.ceil((providerFeed?.total ?? 0) / 20))}</span>
+            <button className="ghost" disabled={(sellerJobPage + 1) * 20 >= (providerFeed?.total ?? 0)} onClick={() => setSellerJobPage(page => page + 1)}>Next requests</button>
+          </nav>}
         </>
       );
     if (section === "quotes")
@@ -6648,7 +7473,7 @@ export default function NanasPortal({
                 ))
               : empty(
                   "No quotes sent",
-                  "Find a matching care request and send a clear healthcare quote.",
+                  "Find a matching care request and send a clear quote.",
                 )}
           </div>
         </>
@@ -6657,7 +7482,7 @@ export default function NanasPortal({
       return (
         <>
           {pageHead(
-            "Seller bookings",
+            "Provider bookings",
             "Deliver care with a clear visit record.",
             "Check in, check out, message the buyer, and follow completion status.",
           )}
@@ -6718,7 +7543,7 @@ export default function NanasPortal({
         <>
           {pageHead(
             "Service profiles & rates",
-            "Give every healthcare service its own story.",
+            "Give every care and household service its own story.",
             "Create 1–3 service profiles. Buyers can switch between them to compare each dedicated biography, experience, qualifications, additional help and BSD rate range.",
             <button
               className="primary-action"
@@ -6741,7 +7566,7 @@ export default function NanasPortal({
             <section className="seller-public-lock seller-public-lock-loading">
               <LockKeyhole />
               <div>
-                <b>Loading your real seller profile…</b>
+                <b>Loading your real provider profile…</b>
                 <span>
                   Checking Supabase before showing service cards, so demo data
                   does not flash on refresh.
@@ -6765,8 +7590,8 @@ export default function NanasPortal({
                 </b>
                 <span>
                   {sellerPublicReady
-                    ? "Buyers can find this seller because profile, services, coverage, and KYC are complete."
-                    : "Finish the required items below before this seller appears in public Find Care results."}
+                    ? "Buyers can find this provider because profile, services, coverage, and KYC are complete."
+                    : "Finish the required items below before this provider appears in public Find Care results."}
                 </span>
                 <ul>
                   {sellerLockItems.map((item) => (
@@ -6834,7 +7659,7 @@ export default function NanasPortal({
             !visibleSellerServiceRows.length &&
             empty(
               "No service profiles yet",
-              "Add your first approved healthcare service and complete its buyer-facing details.",
+              "Add your first approved service and complete its buyer-facing details.",
             )}
         </>
       );
@@ -6844,9 +7669,16 @@ export default function NanasPortal({
           {pageHead(
             "Profile & coverage",
             "Build the profile buyers compare.",
-            "Manage the exact public fields used by Find Care and your full seller profile. Services, availability, verification, badges and reviews stay connected to their authoritative records.",
+            "Manage the exact public fields used by Find Care and your full provider profile. Services, availability, verification, badges and reviews stay connected to their authoritative records.",
           )}
-          <SellerProfileStudio
+          <section className="provider-publication info-banner">
+            <div><b>{sellerPublishedAt ? "Profile publication is on" : "Profile is not published"}</b><p>Publishing shares your public name, location, services and rates in Find Care and enables matching requests. Private documents and care details stay private. Unpublishing does not cancel existing bookings.</p></div>
+            <button type="button" className="primary-action" disabled={busy || sellerWorkspaceLoading || (!sellerPublishedAt && !sellerReadyToPublish)} onClick={() => void setProviderPublication(!sellerPublishedAt)}>{busy ? "Saving…" : sellerPublishedAt ? "Unpublish profile" : "Publish profile"}</button>
+          </section>
+          {sellerWorkspaceLoading ? (
+            <p role="status">Loading your saved provider profile…</p>
+          ) : <SellerProfileStudio
+            key={`${currentUserId}:${JSON.stringify(sellerProfileForm)}:${liveIslands.length}`}
             user={currentUser}
             profile={sellerProfileForm}
             photoUrl={sellerProfilePhotoUrl}
@@ -6855,13 +7687,14 @@ export default function NanasPortal({
             availability={availabilityRows}
             coverage={sellerCoverageRows}
             verificationApproved={sellerVerificationApproved}
+            providerApproved={sellerApprovalStatus === "approved"}
             busy={busy}
             onSubmit={saveSellerProfile}
             onEditServices={() => setSection("services")}
             onEditAvailability={() => setSection("availability")}
-            onEditCoverage={() => setModal("seller-coverage")}
+            onEditCoverage={() => { setSelected(null); setModal("seller-coverage"); }}
             onOpenVerification={() => setSection("kyc")}
-          />
+          />}
         </>
       );
     if (section === "earnings")
@@ -6870,19 +7703,20 @@ export default function NanasPortal({
           {pageHead(
             "Earnings & wallet",
             "Your completed-care ledger.",
-            "Gross, Nanas fee, net earnings, holds, and payout simulation stay auditable.",
+            backendConnected ? "Saved wallet entries and payout records. Test transactions do not represent real money." : "Gross, Nanas fee, net earnings, holds, and payout simulation stay auditable.",
           )}
           <div className="wallet-hero seller">
             <div>
-              <span>Available to pay out</span>
-              <strong>{money(wallet)}</strong>
-              <small>BSD · Simulated settlement</small>
+              <span>{backendConnected ? "Recorded wallet balance" : "Available to pay out"}</span>
+              <strong>{backendConnected && !financeRecords.loaded ? "Loading…" : financeRecords.error ? "Unavailable" : money(wallet)}</strong>
+              <small>{backendConnected ? `BSD · Account ${financeRecords.accountStatus || "loading"} · Not a payout confirmation` : "BSD · Simulated settlement"}</small>
             </div>
-            <button onClick={simulatePayout} disabled={wallet <= 0}>
-              Simulate payout
+            <button onClick={simulatePayout} disabled={!demoMode || wallet <= 0}>
+              {demoMode ? "Simulate payout" : "Payouts not connected"}
             </button>
           </div>
-          <Panel title="Earning history">
+          {backendConnected && <button className="secondary-action financial-refresh" disabled={!financeRecords.loaded} onClick={() => setSection("earnings")}>Refresh financial records</button>}
+          {backendConnected ? renderFinancialRecords("seller") : <><Panel title="Earning history">
             <TransactionRows bookings={myBookings} perspective="seller" />
           </Panel>
           <Panel title="Payout history">
@@ -6898,6 +7732,7 @@ export default function NanasPortal({
               {!state.payouts.some((item) => item.sellerId === currentUserId) && empty("No payouts", "Scheduled simulated payouts will appear here.")}
             </div>
           </Panel>
+          </>}
         </>
       );
     if (section === "kyc")
@@ -6915,10 +7750,9 @@ export default function NanasPortal({
             </button>,
           )}
           <Panel title="Your verification files">
-            <KycRows
-              rows={state.kyc.filter((item) => item.sellerId === currentUserId)}
-            />
+            {renderKycRows({ rows: state.kyc.filter((item) => item.sellerId === currentUserId && !item.type.startsWith("service_credential:")) })}
           </Panel>
+          {backendConnected && <ServiceCredentials key={currentUserId} userId={currentUserId} />}
         </>
       );
     if (section === "badges")
@@ -6930,26 +7764,29 @@ export default function NanasPortal({
             "Credential badges reflect current records; performance badges follow versioned rules.",
           )}
           <div className="badge-showcase">
-            {[
-              "Identity verified",
-              "RN credential",
-              "Highly rated",
-              "Reliable responder",
-            ].map((name, i) => (
+            {(demoMode ? [
+              "Identity verified", "RN credential", "Highly rated", "Reliable responder",
+            ] : state.kyc.filter((item) => item.sellerId === currentUserId && item.status === "approved" && !item.type.startsWith("service_credential:")).map((item) => item.type)).map((name, i) => (
               <article key={name}>
                 <div>
                   <BadgeCheck />
                 </div>
                 <h3>{name}</h3>
                 <p>
-                  {i < 2
-                    ? "Verified and current"
+                  {!demoMode
+                    ? "Verification review approved"
+                    : i < 2 ? "Verified and current"
                     : "Earned from completed bookings and response metrics"}
                 </p>
-                {status(i < 3 ? "approved" : "pending")}
+                {status(!demoMode || i < 3 ? "approved" : "pending")}
               </article>
             ))}
           </div>
+          {!demoMode && !state.kyc.some((item) => item.sellerId === currentUserId && item.status === "approved") && empty("No approved credentials yet", "Submitted documents appear as badges after an authorized verification review.")}
+          <Panel title="Booking-based reviews">
+            <p className="review-policy-note">Reviews stay private until both parties submit, or seven days after completion.</p>
+            {renderBookingReviews()}
+          </Panel>
         </>
       );
     if (section === "safety") return renderSafetyCenter();
@@ -6966,7 +7803,7 @@ export default function NanasPortal({
               <span>
                 <Activity /> Live operations
               </span>
-              <h1>Healthcare marketplace control centre.</h1>
+              <h1>Care marketplace control centre.</h1>
               <p>
                 One place for trust, care delivery, safety, simulated money, and
                 platform health.
@@ -6982,8 +7819,8 @@ export default function NanasPortal({
             </div>
             <aside>
               <ShieldCheck />
-              <b>Protected operations</b>
-              <small>RLS, storage and audited admin commands active</small>
+              <b>{demoMode ? "Demo operations" : "Authenticated operations"}</b>
+              <small>{demoMode ? "Illustrative records and simulated actions" : "Admin session verified; infrastructure checks are separate"}</small>
             </aside>
           </section>
           <div className="metric-grid admin-metrics">
@@ -6991,14 +7828,14 @@ export default function NanasPortal({
               <Users />,
               "Active users",
               String(adminOverview.activeUsers),
-              "Buyer and individual seller accounts",
+              "Buyer and individual provider accounts",
               "mint",
             )}
             {metric(
               <FileCheck2 />,
-              "KYC queue",
-              String(adminOverview.sellersUnderReview),
-              "Manual beta verification",
+              "Verification queue",
+              pendingVerificationCount === null ? "—" : String(pendingVerificationCount),
+              pendingVerificationCount === null ? "Case count unavailable; open review queue" : "Identity and service credentials awaiting review",
               "blue",
             )}
             {metric(
@@ -7020,7 +7857,7 @@ export default function NanasPortal({
             <Panel title="Operations queues">
               <TaskList
                 items={[
-                  `${state.kyc.filter((k) => k.status === "pending").length} KYC case(s) awaiting review`,
+                  pendingVerificationCount === null ? "Verification case count unavailable" : `${pendingVerificationCount} verification case(s) pending or needing information`,
                   `${adminOverview.openDisputes} dispute(s) open`,
                   `${adminOverview.moderationQueue} moderation report(s) open`,
                   `${state.users.filter((u) => u.status !== "active").length} restricted or suspended account(s)`,
@@ -7030,12 +7867,12 @@ export default function NanasPortal({
             <Panel title="Platform health">
               <div className="health-list">
                 <span>
-                  <i className="good" />
-                  Database & RLS <b>Ready</b>
+                  <i className="warn" />
+                  Database & RLS <b>{demoMode ? "Demo" : "Not verified"}</b>
                 </span>
                 <span>
-                  <i className="good" />
-                  Storage buckets <b>Ready</b>
+                  <i className="warn" />
+                  Storage buckets <b>{demoMode ? "Demo" : "Not verified"}</b>
                 </span>
                 <span>
                   <i
@@ -7057,10 +7894,10 @@ export default function NanasPortal({
         <>
           {pageHead(
             "User management",
-            "Buyer and seller account enforcement.",
+            "Buyer and provider account enforcement.",
             "Restrict, suspend, ban, or restore with a required reason and immutable audit event.",
           )}
-          <Panel title={`${state.users.length} accounts`}>
+          <Panel title={`${state.users.filter((user) => user.role !== "admin").length} accounts`}>
             <div className="data-table">
               <div className="table-head">
                 <span>User</span>
@@ -7106,8 +7943,9 @@ export default function NanasPortal({
             "Sensitive document reads require purpose logging; only approved facts create public badges.",
           )}
           <Panel title="Verification queue">
-            <KycRows rows={state.kyc} admin />
+            {renderKycRows({ rows: state.kyc.filter(item=>!item.type.startsWith("service_credential:")), admin: true })}
           </Panel>
+          {backendConnected && <ServiceCredentials admin key={currentUserId} userId={currentUserId} />}
         </>
       );
     if (section === "bookings")
@@ -7136,9 +7974,9 @@ export default function NanasPortal({
               <article className="case-card" key={d.id}>
                 <header>
                   {status(d.status)}
-                  <span>Normal priority</span>
+                  <span>Booking dispute</span>
                 </header>
-                <h3>{d.reason}</h3>
+                <h3>{d.reason.replaceAll("_", " ")}</h3>
                 <p>{d.summary}</p>
                 <small>
                   Booking {d.bookingId} · Opened by {d.openedBy}
@@ -7192,15 +8030,13 @@ export default function NanasPortal({
                   </h3>
                   <p>
                     {b.reference} ·{" "}
-                    {
-                      state.messages.filter(
+                    {backendConnected ? "Case authorization required" : <>{state.messages.filter(
                         (m) => m.conversationId === b.conversationId,
-                      ).length
-                    }{" "}
-                    messages
+                      ).length} messages</>}
                   </p>
                 </div>
                 <button
+                  disabled={!b.conversationId}
                   onClick={() => {
                     setSelected(b.conversationId);
                     setModal("message-audit");
@@ -7211,7 +8047,7 @@ export default function NanasPortal({
               </article>
             ))}
           </div>
-          {selected && !modal && <Conversation conversationId={selected} />}
+          {demoMode && selected && !modal && renderConversation(selected)}
         </>
       );
     if (section === "moderation") {
@@ -7232,7 +8068,7 @@ export default function NanasPortal({
         <>
           {pageHead(
             "Content moderation",
-            "Keep public healthcare content precise.",
+            "Keep public marketplace content precise.",
             "Review profiles, messages, reviews, and reports without silently rewriting user history.",
           )}
           <div className="moderation-grid">
@@ -7297,6 +8133,8 @@ export default function NanasPortal({
         </>
       );
     }
+    if (section === "finance" && backendConnected)
+      return <>{pageHead("Finance & reconciliation", "Recorded money, reconciled by currency.", "Review complete database totals, payment receipts, immutable ledger movements and payout records.")}<AdminFinance /></>;
     if (section === "finance")
       return (
         <>
@@ -7315,14 +8153,14 @@ export default function NanasPortal({
             )}
             {metric(
               <WalletCards />,
-              "Seller payable",
+              "Provider payable",
               money(
                 state.bookings
                   .filter((b) => b.status === "completed")
                   .reduce((s, b) => s + b.sellerNet, 0) -
                   state.payouts.reduce((sum, payout) => sum + payout.amount, 0),
               ),
-              "Available seller wallets",
+              "Available provider wallets",
               "blue",
             )}
             {metric(
@@ -7428,8 +8266,8 @@ export default function NanasPortal({
       return (
         <>
           {pageHead(
-            "Healthcare catalog",
-            "Admin-managed eligible care services.",
+            "Care and household catalog",
+            "Admin-managed eligible services.",
             "Pricing units, credential requirements, booking rules, risk level, and launch areas are configurable.",
             <button
               className="primary-action"
@@ -7474,7 +8312,7 @@ export default function NanasPortal({
           {pageHead(
             "Islands & service areas",
             "Bahamas launch coverage.",
-            "Manage active islands, zones, boundaries, travel defaults, and healthcare-service availability without changing historical bookings.",
+            "Manage active islands, zones, boundaries, travel defaults, and service availability without changing historical bookings.",
             <button
               className="primary-action"
               onClick={() => {
@@ -7537,7 +8375,7 @@ export default function NanasPortal({
                 state.supportCases.filter((item) => item.status !== "resolved")
                   .length,
               ),
-              "Buyer and seller help",
+              "Buyer and provider help",
               "blue",
             )}
             {metric(
@@ -7620,7 +8458,7 @@ export default function NanasPortal({
                     ))
                   : empty(
                       "Support queue clear",
-                      "New buyer and seller support requests will appear here.",
+                      "New buyer and provider support requests will appear here.",
                     )}
               </div>
             </Panel>
@@ -7646,7 +8484,7 @@ export default function NanasPortal({
               className="primary-action"
               onClick={() =>
                 notify(
-                  "Redacted CSV export queued in the private exports bucket.",
+                  "Export generation is not connected yet. No export was queued or created.",
                 )
               }
             >
@@ -7656,13 +8494,13 @@ export default function NanasPortal({
           <div className="metric-grid">
             {metric(
               <Users />,
-              "Approved sellers",
+              "Approved providers",
               String(
                 state.users.filter(
                   (item) => item.role === "seller" && item.status === "active",
                 ).length,
               ),
-              "Individual healthcare sellers",
+              "Individual providers",
               "mint",
             )}
             {metric(
@@ -7674,9 +8512,9 @@ export default function NanasPortal({
             )}
             {metric(
               <CircleDollarSign />,
-              "Simulated GMV",
+              "Simulated captures",
               money(adminOverview.simulatedVolume),
-              "BSD captured booking value",
+              "BSD · before refunds · includes message payments",
               "sand",
             )}
             {metric(
@@ -7690,7 +8528,7 @@ export default function NanasPortal({
           <Panel title="Saved operational views">
             <TaskList
               items={[
-                "Seller approval funnel",
+                "Provider approval funnel",
                 "Care request to confirmed booking",
                 "Cancellation and refund reasons",
                 "Notification delivery failures",
@@ -7765,29 +8603,30 @@ export default function NanasPortal({
           {pageHead(
             "Workers & integrations",
             "Background health and recovery controls.",
-            "Review worker schedules, dead letters, vendor adapters, webhook health, and runbook links before replaying any failed work.",
+            "Registry schedules do not verify deployment or scheduler execution. Check recorded runs and errors before replaying failed work.",
           )}
           <div className="delivery-grid">
-            {adminOps.workers.map((worker) => (
+            {backendConnected && workerRecordsState !== "loaded" ? empty(
+              workerRecordsState === "error" ? "Worker records unavailable" : "Loading worker records",
+              workerRecordsState === "error" ? "Run evidence could not be loaded. Refresh to retry; no health conclusion is available." : "Retrieving registry and recent execution history.",
+            ) : adminOps.workers.map((worker) => {
+              const evidence = workerEvidence(worker, adminOps.workerRuns.find((run) => run.key === worker.key));
+              return (
               <article key={worker.key}>
-                <i
-                  className={
-                    worker.enabled && worker.health !== "failed"
-                      ? "good"
-                      : "warn"
-                  }
-                />
+                <i className={evidence.tone} />
                 <span>{worker.key}</span>
-                <strong>{worker.enabled ? worker.health : "Disabled"}</strong>
+                <strong>{evidence.label}</strong>
                 <small>
                   {worker.lastRunAt
-                    ? `Last run ${dateTime(worker.lastRunAt)}`
-                    : `Schedule ${worker.schedule}`}
+                    ? `Registry last run ${dateTime(worker.lastRunAt)}`
+                    : "Registry has no run timestamp"}
                 </small>
+                <small>Configured schedule: {worker.schedule}</small>
               </article>
-            ))}
+              );
+            })}
           </div>
-          <Panel
+          {(!backendConnected || workerRecordsState === "loaded") && <Panel
             title={`${adminOps.workerRuns.length} recent worker run(s) · ${adminOps.deadLetters.length} dead letter(s)`}
           >
             <div className="list-rows">
@@ -7810,10 +8649,10 @@ export default function NanasPortal({
                   ))
                 : empty(
                     "No worker runs yet",
-                    "Workers remain local and intentionally undeployed; verified runs will appear here.",
+                    "No recent execution records were returned. This does not confirm whether a worker is deployed or scheduled.",
                   )}
             </div>
-          </Panel>
+          </Panel>}
         </>
       );
     if (section === "audit")
@@ -7855,6 +8694,9 @@ export default function NanasPortal({
                     </b>
                     <small>
                       {event.fields.join(", ")} · {dateTime(event.createdAt)}
+                      {event.caseId && <> · Case {event.caseId}</>}
+                      {event.reason && <> · Reason: {event.reason}</>}
+                      {event.messageCount !== undefined && <> · {event.messageCount} message(s) returned</>}
                     </small>
                   </span>
                   <code>{event.id.slice(0, 13)}</code>
@@ -7947,7 +8789,7 @@ export default function NanasPortal({
         {pageHead(
           "Secure messages",
           "Booking-scoped care conversations.",
-          "Messages, files, and read state stay tied to authorized booking participants.",
+          "Messages and read receipts stay tied to authorized booking participants.",
         )}
         <div className="message-layout">
           <div className="conversation-list">
@@ -7982,9 +8824,10 @@ export default function NanasPortal({
                     <small>
                       {booking.reference} · {booking.service}
                     </small>
+                    {Boolean(conversationAccess[booking.conversationId]?.unread_count) && <small>{conversationAccess[booking.conversationId].unread_count} unread</small>}
                     {locked && (
                       <small className="conversation-lock">
-                        <LockKeyhole /> Upgrade to view seller reply
+                        <LockKeyhole /> Upgrade to view provider reply
                       </small>
                     )}
                   </div>
@@ -7994,7 +8837,7 @@ export default function NanasPortal({
             })}
           </div>
           {activeConversationId ? (
-            <Conversation conversationId={activeConversationId} />
+            renderConversation(activeConversationId)
           ) : (
             <div className="message-empty">
               <MessageCircle />
@@ -8006,7 +8849,7 @@ export default function NanasPortal({
       </>
     );
   }
-  function Conversation({ conversationId }: { conversationId: string }) {
+  function renderConversation(conversationId: string) {
     const booking = state.bookings.find(
       (b) => b.conversationId === conversationId,
     );
@@ -8032,6 +8875,7 @@ export default function NanasPortal({
             </button>
           ) : role !== "admin" ? (
             <button
+              disabled={backendConnected && !conversationAccess[conversationId]?.can_send}
               onClick={() => {
                 setModal("message");
                 setSelected(conversationId);
@@ -8042,7 +8886,7 @@ export default function NanasPortal({
           ) : null}
         </header>
         <div className={paywalled ? "thread-scroll paywalled" : "thread-scroll"}>
-          {!paywalled && <div>
+          {!paywalled && backendConnected && role!=="admin" ? <ConversationHistory key={`${currentUserId}:${conversationId}`} conversationId={conversationId} currentUserId={currentUserId} otherName={otherPartyName ?? "Nanas member"} otherReadAt={conversationAccess[conversationId]?.other_last_read_at} refreshKey={messages.map(message=>`${message.id}:${message.body}`).join("|")} /> : !paywalled && <div>
             {messages.map((m) => (
               <div
                 key={m.id}
@@ -8052,7 +8896,7 @@ export default function NanasPortal({
               >
                 <b>{m.senderName}</b>
                 <p>{m.body}</p>
-                <small>{dateTime(m.at)}</small>
+                <small>{dateTime(m.at)}{m.senderId === currentUserId && conversationAccess[conversationId]?.other_last_read_at && new Date(conversationAccess[conversationId].other_last_read_at!).getTime() >= new Date(m.at).getTime() ? " · Read" : ""}</small>
               </div>
             ))}
             {!messages.length &&
@@ -8066,7 +8910,7 @@ export default function NanasPortal({
                 </div>
                 <h3>View your conversation with {otherPartyName}</h3>
                 <p>
-                  Upgrade now to see seller messages and continue your care
+                  Upgrade now to see provider messages and continue your care
                   conversation.
                 </p>
                 <button onClick={() => openMessageUpgrade(conversationId)}>
@@ -8099,7 +8943,7 @@ export default function NanasPortal({
                   <span>{request.summary}</span>
                   <small>
                     {request.mode === "on_demand" ? "On-demand" : "Scheduled"} ·{" "}
-                    {dateTime(request.startsAt)} · {request.area}
+                    {requestScheduleSummary(request) ?? dateTime(request.startsAt)} · {request.area}
                   </small>
                 </div>
                 <div className="list-side">
@@ -8108,7 +8952,7 @@ export default function NanasPortal({
                   <div className="row-actions">
                     <Link
                       className="ghost"
-                      href={`/app/${seller ? "seller" : "buyer"}/${seller ? "requests" : "care-requests"}/${request.id}`}
+                      href={portalHref(seller ? "seller" : "buyer", `${seller ? "requests" : "care-requests"}/${request.id}`)}
                       onClick={() => {
                         setSelected(request.id);
                         setSection(seller ? "requests" : "care-requests");
@@ -8132,7 +8976,7 @@ export default function NanasPortal({
             ))
           : empty(
               "No care requests",
-              "New healthcare requests will appear here.",
+              "New care and household requests will appear here.",
             )}
       </div>
     );
@@ -8142,7 +8986,7 @@ export default function NanasPortal({
       sellerJobQuery.trim(),
       sellerJobService !== "all" ? sellerJobService : "",
       sellerJobArea !== "all" ? sellerJobArea : "",
-      sellerJobSort !== "newest" ? sellerJobSort : "",
+      sellerJobSort !== "recommended" ? sellerJobSort : "",
     ].filter(Boolean).length;
     return (
       <section className="seller-job-filter-panel">
@@ -8150,12 +8994,13 @@ export default function NanasPortal({
           <Search />
           <input
             value={sellerJobQuery}
-            onChange={(event) => setSellerJobQuery(event.target.value)}
-            placeholder="Search active jobs by care type, buyer, area, or summary"
+            onChange={(event) => { setSellerJobQuery(event.target.value); setSellerJobPage(0); }}
+            maxLength={200}
+            placeholder="Search active jobs by care type, area, or summary"
             aria-label="Search active jobs"
           />
           {sellerJobQuery && (
-            <button onClick={() => setSellerJobQuery("")} aria-label="Clear">
+            <button onClick={() => { setSellerJobQuery(""); setSellerJobPage(0); }} aria-label="Clear">
               <X />
             </button>
           )}
@@ -8165,9 +9010,9 @@ export default function NanasPortal({
             <span>Care type</span>
             <select
               value={sellerJobService}
-              onChange={(event) => setSellerJobService(event.target.value)}
+              onChange={(event) => { setSellerJobService(event.target.value); setSellerJobPage(0); }}
             >
-              <option value="all">All healthcare services</option>
+              <option value="all">All care and household services</option>
               {liveServices.map((service) => (
                 <option key={service.id} value={service.name}>
                   {service.name}
@@ -8179,7 +9024,7 @@ export default function NanasPortal({
             <span>Area</span>
             <select
               value={sellerJobArea}
-              onChange={(event) => setSellerJobArea(event.target.value)}
+              onChange={(event) => { setSellerJobArea(event.target.value); setSellerJobPage(0); }}
             >
               <option value="all">All islands and areas</option>
               {liveAreas.map((area) => (
@@ -8193,9 +9038,10 @@ export default function NanasPortal({
             <span>Sort</span>
             <select
               value={sellerJobSort}
-              onChange={(event) => setSellerJobSort(event.target.value)}
+              onChange={(event) => { setSellerJobSort(event.target.value); setSellerJobPage(0); }}
             >
-              <option value="newest">Newest active</option>
+              <option value="recommended">Recommended (featured first)</option>
+              <option value="newest">Newest posted</option>
               <option value="soonest">Soonest care date</option>
               <option value="budget">Highest budget</option>
               <option value="quotes">Fewest quotes</option>
@@ -8205,7 +9051,7 @@ export default function NanasPortal({
         <div className="seller-job-filter-meta">
           <span>
             <SlidersHorizontal />
-            {sellerVisibleRequests.length} of {total} active jobs showing
+            {backendConnected && !providerFeedReady ? "Checking matching jobs…" : `${sellerVisibleRequests.length} of ${total} matching active jobs showing`}
           </span>
           {activeFilters > 0 && (
             <button
@@ -8213,7 +9059,8 @@ export default function NanasPortal({
                 setSellerJobQuery("");
                 setSellerJobService("all");
                 setSellerJobArea("all");
-                setSellerJobSort("newest");
+                setSellerJobSort("recommended");
+                setSellerJobPage(0);
               }}
             >
               Reset filters
@@ -8248,10 +9095,7 @@ export default function NanasPortal({
           const buyerRequests = state.requests.filter(
             (item) => item.buyerId === request.buyerId,
           );
-          const firstKnownActivity = [
-            ...buyerRequests.map((item) => item.startsAt),
-            ...buyerBookings.map((item) => item.startsAt),
-          ]
+          const firstKnownActivity = buyerRequests.map((item) => item.createdAt ?? "")
             .map((value) => new Date(value).getTime())
             .filter(Number.isFinite)
             .sort((a, b) => a - b)[0];
@@ -8269,7 +9113,7 @@ export default function NanasPortal({
                 3600000,
             ),
           );
-          const hasQuoted = request.quotes.some(
+          const hasQuoted = request.hasQuoted || request.quotes.some(
             (quote) => quote.sellerId === currentUserId,
           );
           const premiumBuyer =
@@ -8285,6 +9129,7 @@ export default function NanasPortal({
                     {request.service}
                   </span>
                   {status(request.status)}
+                  {request.featured && <span className="request-featured"><Star /> Featured request</span>}
                 </div>
                 <strong>Up to {money(request.budget)}</strong>
               </header>
@@ -8294,7 +9139,7 @@ export default function NanasPortal({
                   <div className="request-meta">
                     <span>
                       <CalendarDays />
-                      {dateTime(request.startsAt)}
+                      {requestScheduleSummary(request) ?? dateTime(request.startsAt)}
                     </span>
                     <span>
                       <House />
@@ -8308,8 +9153,8 @@ export default function NanasPortal({
                   <div className="seller-job-stats">
                     <span>
                       <ClipboardCheck />
-                      {request.quotes.length} quote
-                      {request.quotes.length === 1 ? "" : "s"} submitted
+                      {request.quoteCount ?? request.quotes.length} quote
+                      {(request.quoteCount ?? request.quotes.length) === 1 ? "" : "s"} submitted
                     </span>
                     <span>
                       <ShieldCheck />
@@ -8332,9 +9177,9 @@ export default function NanasPortal({
                   <div className="buyer-trust-badges">
                     <span>
                       <UserRoundCheck />
-                      Verified buyer
+                      Registered buyer
                     </span>
-                    {premiumBuyer && (
+                    {demoMode && premiumBuyer && (
                       <span>
                         <BadgeCheck />
                         Premium buyer
@@ -8342,21 +9187,21 @@ export default function NanasPortal({
                     )}
                     <span>
                       <Clock3 />
-                      Member since {memberSince}
+                      First known request {memberSince}
                     </span>
                   </div>
                   <dl>
                     <div>
                       <dt>Public rating</dt>
-                      <dd>{completedBookings ? "5.0" : "New"}</dd>
+                      <dd>{demoMode && completedBookings ? "5.0" : "Not available"}</dd>
                     </div>
                     <div>
-                      <dt>Completed bookings</dt>
+                      <dt>{demoMode ? "Completed bookings" : "Completed with you"}</dt>
                       <dd>{completedBookings}</dd>
                     </div>
                     <div>
-                      <dt>Open requests</dt>
-                      <dd>{buyerRequests.length}</dd>
+                      <dt>Visible open requests</dt>
+                      <dd>{buyerRequests.filter(item => ["requested", "offered"].includes(item.status) && new Date(item.startsAt).getTime() > eligibilityNow).length}</dd>
                     </div>
                   </dl>
                   <p>
@@ -8368,7 +9213,7 @@ export default function NanasPortal({
               <footer>
                 <Link
                   className="ghost"
-                  href={`/app/seller/requests/${request.id}`}
+                  href={portalHref("seller", `requests/${request.id}`)}
                   onClick={() => {
                     setSelected(request.id);
                     setSection("requests");
@@ -8414,7 +9259,7 @@ export default function NanasPortal({
             <h3>{quote.sellerName}</h3>
             <span>
               <BadgeCheck />
-              Identity & credential verified
+              Provider quote · review profile credentials
             </span>
           </div>
           {status(quote.status)}
@@ -8454,6 +9299,30 @@ export default function NanasPortal({
       </article>
     );
   }
+  function canReviewBooking(booking: DemoBooking) {
+    return (booking.status === "completed" || booking.status === "resolved") &&
+      (Boolean(booking.completedAt) || (demoMode && booking.status === "completed"));
+  }
+
+  function renderBookingReviews() {
+    const eligible = myBookings.filter((booking) => canReviewBooking(booking) || bookingReviews.some((review) => review.booking_id === booking.id));
+    if (!eligible.length) return empty("No completed bookings to review", "Reviews become available after a care visit is completed.");
+    return <div className="review-grid">
+      {eligible.map((booking) => {
+        const own = bookingReviews.find((review) => review.booking_id === booking.id && review.author_id === currentUserId);
+        const received = bookingReviews.find((review) => review.booking_id === booking.id && review.subject_id === currentUserId && review.status === "published");
+        const submitted = Boolean(own) || booking.reviewedBy.includes(currentUserId);
+        return <article className="review-card" key={booking.id}>
+          <Star /><h3>{booking.service} with {role === "seller" ? booking.buyerName : booking.sellerName}</h3>
+          <small>{booking.reference}</small>
+          {own ? <div className="booking-review-content"><b>Your review · {own.overall_rating}/5</b><span>{own.status === "pending_peer" ? "Private — waiting for the other review or the seven-day window" : own.status === "published" ? "Published" : "Not publicly visible"}</span>{own.body && <p>{own.body}</p>}</div> : <p>{submitted ? "Your review has been submitted." : "Leave one verified review of this completed booking."}</p>}
+          {received && <div className="booking-review-content"><b>Review received · {received.overall_rating}/5</b>{received.body && <p>{received.body}</p>}</div>}
+          <button disabled={busy || submitted || !canReviewBooking(booking)} onClick={() => { setSelected(booking.id); setModal("review"); }}>{submitted ? "Review submitted" : "Leave verified review"}</button>
+        </article>;
+      })}
+    </div>;
+  }
+
   function BookingRows({ bookings }: { bookings: DemoBooking[] }) {
     return (
       <div className="list-rows booking-rows">
@@ -8488,6 +9357,7 @@ export default function NanasPortal({
                     </button>
                     {role === "seller" && booking.status === "in_progress" && (
                       <button
+                        disabled={busy}
                         onClick={() =>
                           transition(booking, "completion_pending")
                         }
@@ -8498,6 +9368,7 @@ export default function NanasPortal({
                     {role === "buyer" &&
                       booking.status === "completion_pending" && (
                         <button
+                          disabled={busy}
                           onClick={() => transition(booking, "completed")}
                         >
                           Confirm complete
@@ -8508,11 +9379,14 @@ export default function NanasPortal({
                         className="ghost"
                         onClick={() => {
                           setSelected(booking.conversationId);
-                          setSection("messages");
+                          setSection("messages", booking.conversationId);
                         }}
                       >
                         Message
                       </button>
+                    )}
+                    {role !== "admin" && canReviewBooking(booking) && (
+                      <button className="ghost" onClick={() => chooseSection(role === "seller" ? "badges" : "reviews")}>Reviews</button>
                     )}
                   </div>
                 </div>
@@ -8522,6 +9396,42 @@ export default function NanasPortal({
       </div>
     );
   }
+  function renderFinancialRecords(perspective: "buyer" | "seller") {
+    if (!financeRecords.loaded) return empty("Loading financial records", "Retrieving your account ledger and receipts.");
+    if (financeRecords.error) return empty("Financial records unavailable", financeRecords.error);
+    const amount = (minor: number, currency: string) => new Intl.NumberFormat("en-BS", { style: "currency", currency }).format(minor / 100);
+    return <>
+      {perspective === "buyer" && <Panel title="Payment receipts · latest 100">
+        <div className="transaction-list financial-records">
+          {financeRecords.payments.map((payment) => <div key={payment.id}>
+            <span className="transaction-icon buyer"><CircleDollarSign /></span>
+            <div><b>{payment.booking_id ? "Booking payment" : payment.request_id ? "Care request payment" : "Messaging / service payment"}</b><small>{payment.processor === "simulation" ? "TEST ONLY · Simulated payment" : payment.processor} · {dateTime(payment.created_at)}</small><small>Receipt {payment.id}</small><small>Captured {amount(payment.captured_minor, payment.currency)} · Refunded {amount(payment.refunded_minor, payment.currency)}</small></div>
+            {status(payment.status)}<strong>{amount(payment.amount_minor, payment.currency)}</strong>
+          </div>)}
+          {!financeRecords.payments.length && empty("No payment receipts", "Confirmed payment records will appear here.")}
+        </div>
+      </Panel>}
+      <Panel title="Wallet ledger · latest 100">
+        <p className="financial-ledger-note">Ledger entries include account corrections. A credit is not necessarily a refund or a new payment.{perspective === "buyer" ? " Use the receipts above to check captured and refunded amounts." : " Payout records are listed separately below."}</p>
+        <div className="transaction-list financial-records">
+          {financeRecords.entries.map((entry) => <div key={entry.id}>
+            <span className={`transaction-icon ${perspective}`}><WalletCards /></span>
+            <div><b>{entry.direction === "credit" ? "Wallet credit" : "Wallet debit"}</b><small>{dateTime(entry.created_at)}{entry.booking_id ? ` · ${state.bookings.find((booking) => booking.id === entry.booking_id)?.reference ?? entry.booking_id}` : ""}</small><small>Entry {entry.id}</small></div>
+            <strong>{entry.direction === "credit" ? "+" : "−"}{amount(entry.amount_minor, entry.ledger_accounts.currency)}</strong>
+          </div>)}
+          {!financeRecords.entries.length && empty("No wallet movements", "Booking charges are separate from wallet credits and debits.")}
+        </div>
+      </Panel>
+      {perspective === "seller" && <Panel title="Payout records · latest 100">
+        <p className="review-policy-note">A payout processor is not connected. No withdrawal can be requested here yet.</p>
+        <div className="transaction-list financial-records">
+          {financeRecords.payouts.map((payout) => <div key={payout.id}><div><b>{payout.processor === "simulation" ? "Test payout record" : "Payout record"}</b><small>{dateTime(payout.created_at)} · {payout.id}</small></div>{status(payout.status)}<strong>{amount(payout.amount_minor, payout.currency)}</strong></div>)}
+          {!financeRecords.payouts.length && empty("No payout records", "No connected payout has been recorded.")}
+        </div>
+      </Panel>}
+    </>;
+  }
+
   function TransactionRows({
     bookings,
     perspective,
@@ -8578,7 +9488,7 @@ export default function NanasPortal({
       </div>
     );
   }
-  function KycRows({
+  function renderKycRows({
     rows,
     admin = false,
   }: {
@@ -8596,6 +9506,8 @@ export default function NanasPortal({
               <b>{item.type}</b>
               <span>{admin ? item.sellerName : item.fileName}</span>
               <small>Submitted {dateTime(item.submittedAt)}</small>
+              {item.decisionReason && <p className="kyc-decision-note"><strong>Review feedback:</strong> {item.decisionReason}</p>}
+              {!admin && backendConnected && <VerificationEvidence key={`${item.id}:${item.status}:${item.submittedAt}`} caseId={item.id} />}
             </div>
             {status(item.status)}
             {admin && (
@@ -8642,14 +9554,7 @@ export default function NanasPortal({
         {notes.map((n) => (
           <button
             key={n.id}
-            onClick={() =>
-              setState((prev) => ({
-                ...prev,
-                notifications: prev.notifications.map((item) =>
-                  item.id === n.id ? { ...item, read: true } : item,
-                ),
-              }))
-            }
+            onClick={() => void openNotification(n)}
           >
             <i className={!n.read ? "unread" : ""} />
             <Bell />
@@ -8676,27 +9581,8 @@ export default function NanasPortal({
       </div>
     );
   }
-  function Panel({
-    title,
-    action,
-    children,
-  }: {
-    title: string;
-    action?: ReactNode;
-    children: ReactNode;
-  }) {
-    return (
-      <section className="portal-panel">
-        <header>
-          <h2>{title}</h2>
-          {action}
-        </header>
-        {children}
-      </section>
-    );
-  }
-
   function renderModal() {
+    const selectedModeration = state.moderationReports.find(item=>item.id===selected);
     const selectedBooking = state.bookings.find((item) => item.id === selected);
     const selectedKyc = state.kyc.find((item) => item.id === selected);
     const selectedDispute = state.disputes.find((item) => item.id === selected);
@@ -8718,8 +9604,12 @@ export default function NanasPortal({
     const selectedMember = householdMembers.find(
       (item) => item.id === selected,
     );
+    const selectedEmergencyContact = emergencyContacts.find((item) => item.id === selected);
     const selectedSellerServiceRow = sellerServiceRows.find(
       (item) => item.serviceId === selected,
+    );
+    const selectedSellerCoverageRow = sellerCoverageRows.find(
+      (item) => item.areaId === selected,
     );
     if (modal === "kyc-review" && selectedKyc)
       return (
@@ -8727,13 +9617,14 @@ export default function NanasPortal({
           <ModalHead
             icon={<FileCheck2 />}
             title={`${selectedKyc.type} evidence`}
-            copy="The local demo exposes document metadata only. Opening this review creates a sensitive-access record when a decision is saved."
+            copy={demoMode ? "The local demo exposes document metadata only. Saving a decision records a demo audit entry." : "Load the private evidence below before making a decision. Access is authorized and audited."}
           />
           <div className="booking-detail-summary">
             <div>{status(selectedKyc.status)}<strong>{selectedKyc.fileName}</strong></div>
             <p>{selectedKyc.sellerName} · {selectedKyc.id}</p>
             <small>Submitted {dateTime(selectedKyc.submittedAt)}</small>
           </div>
+          {backendConnected && <VerificationEvidence key={selectedKyc.id} caseId={selectedKyc.id} />}
           {selectedKyc.status === "approved" || selectedKyc.status === "rejected" ? (
             <div className="info-banner"><ShieldCheck /><div><b>Decision is final</b><span>Evidence remains viewable; action buttons are disabled.</span></div></div>
           ) : (
@@ -8761,31 +9652,37 @@ export default function NanasPortal({
           <ModalHead
             icon={<ShieldCheck />}
             title={`Dispute evidence · ${selectedDispute.id}`}
-            copy="Review the linked booking and message context before selecting an outcome."
+            copy="Review the case summary and linked booking. Private messages require audited access in Messages."
           />
           <div className="booking-detail-summary">
             <div>{status(selectedDispute.status)}<strong>{selectedDisputeBooking ? money(selectedDisputeBooking.total) : "No booking value"}</strong></div>
             <p>{selectedDispute.reason} · {selectedDispute.summary}</p>
-            <small>{selectedDisputeBooking ? `${selectedDisputeBooking.reference} · ${state.messages.filter((message) => message.conversationId === selectedDisputeBooking.conversationId).length} message(s)` : `Booking ${selectedDispute.bookingId}`}</small>
+            <small>{selectedDisputeBooking ? `${selectedDisputeBooking.reference} · Recorded refunds ${money(selectedDisputeBooking.refundAmount ?? 0)}` : `Booking ${selectedDispute.bookingId}`}</small>
+            {selectedDisputeBooking && <button className="secondary-action" onClick={() => { setSelected(selectedDisputeBooking.id); setModal("booking-detail"); }}>View linked booking</button>}
           </div>
           {selectedDispute.status === "resolved" ? (
             <div className="resolution"><Check />{selectedDispute.resolution}</div>
           ) : (
             <form className="portal-form" onSubmit={resolveDispute}>
+              <p>Simulation only: refunds credit the buyer wallet, not a bank card. A final partial refund also settles the remaining protected balance to the provider and platform. Escalation does not move money.</p>
               <label>
                 Resolution outcome
                 <select name="outcome" required>
-                  <option value="release_seller_funds">Release seller funds</option>
-                  <option value="refund_buyer">Refund buyer</option>
-                  <option value="split_settlement">Split settlement</option>
+                  <option value="release_funds">Release provider funds</option>
+                  <option value="full_refund">Refund buyer</option>
+                  <option value="partial_refund">Partial refund</option>
                   <option value="escalate">Escalate for specialist review</option>
                 </select>
+              </label>
+              <label>
+                Partial refund amount (BSD)
+                <input name="refundAmount" type="number" min="0.01" step="0.01" max={selectedDisputeBooking ? selectedDisputeBooking.total - (selectedDisputeBooking.refundAmount ?? 0) : undefined} placeholder="Required only for a partial refund" />
               </label>
               <label>
                 Evidence and rationale
                 <textarea name="reason" minLength={10} maxLength={1500} required />
               </label>
-              <button type="submit">Record resolution</button>
+              <button disabled={busy} type="submit">{busy ? "Saving resolution…" : "Record resolution"}</button>
             </form>
           )}
         </>
@@ -8811,7 +9708,7 @@ export default function NanasPortal({
                 ? "Edit private care recipient"
                 : "Add private care recipient"
             }
-            copy="These details are participant-scoped and are never shown in public seller discovery."
+            copy="These details are participant-scoped and are never shown in public provider discovery."
           />
           <form className="portal-form" onSubmit={saveHouseholdMember}>
             <label>
@@ -8837,6 +9734,7 @@ export default function NanasPortal({
               <input
                 name="dateOfBirth"
                 type="date"
+                max={bahamasInputValue(Date.now()).slice(0, 10)}
                 defaultValue={selectedMember?.dateOfBirth}
               />
             </label>
@@ -8857,6 +9755,21 @@ export default function NanasPortal({
               Active care recipient
             </label>
             <button type="submit">Save private care recipient</button>
+          </form>
+        </>
+      );
+    if (modal === "emergency-contact")
+      return (
+        <>
+          <ModalHead icon={<ShieldCheck />} title={selectedEmergencyContact ? "Edit emergency contact" : "Add emergency contact"} copy="Private and optional. A provider can load only name, phone and relationship during an eligible active booking; each access is logged." />
+          <form className="portal-form" onSubmit={saveEmergencyContact}>
+            <label>Name<input name="name" required minLength={2} maxLength={80} defaultValue={selectedEmergencyContact?.name} /></label>
+            <label>Phone in international format<input name="phone" type="tel" required pattern="\+[1-9][0-9]{7,14}" placeholder="+12425550123" defaultValue={selectedEmergencyContact?.phone} /></label>
+            <label>Relationship<input name="relationship" required minLength={2} maxLength={80} defaultValue={selectedEmergencyContact?.relationship} /></label>
+            <label>Priority (1 is first)<input name="priority" type="number" min="1" max="10" required defaultValue={selectedEmergencyContact?.priority ?? 1} /></label>
+            <label><input name="consent" type="checkbox" required defaultChecked={selectedEmergencyContact?.consentConfirmed ?? false} /> I have permission to store and share these details for an eligible care booking.</label>
+            <p>Nanas does not replace 911 or local emergency services. Revoking consent immediately stops future disclosure.</p>
+            <button type="submit">Save emergency contact</button>
           </form>
         </>
       );
@@ -8918,15 +9831,15 @@ export default function NanasPortal({
         <>
           <ModalHead
             icon={<Stethoscope />}
-            title="Healthcare service profile"
-            copy="Sellers can publish 1–3 categories. Write a substantial, unique buyer-facing biography and qualifications for this service."
+            title="Care and household service profile"
+            copy="Providers can publish 1–3 categories. Write a substantial, unique buyer-facing biography and qualifications for this service."
           />
           <form
             className="portal-form seller-service-editor"
             onSubmit={saveSellerService}
           >
             <label>
-              Healthcare service
+              Care or household service
               <select
                 name="serviceId"
                 disabled={!!selectedSellerServiceRow}
@@ -9058,19 +9971,28 @@ export default function NanasPortal({
         <>
           <ModalHead
             icon={<House />}
-            title="Add or update coverage"
-            copy="Coverage eligibility is enforced before requests appear and before quotes are accepted."
+            title="Manage coverage"
+            copy="Add a service area or choose an existing row to update or deactivate it. Coverage eligibility is enforced before requests appear and before quotes are accepted."
           />
-          <form className="portal-form" onSubmit={saveSellerCoverage}>
+          {sellerCoverageRows.length > 0 && <div className="seller-coverage-picker" aria-label="Saved coverage areas">
+            {sellerCoverageRows.map((area) => <button type="button" key={area.areaId} className={selectedSellerCoverageRow?.areaId === area.areaId ? "active" : ""} onClick={() => setSelected(area.areaId)}>
+              <span>{area.name}</span><small>{area.active ? "Active" : "Inactive"} · {area.radius} km · {money(area.travelFee)} travel</small>
+            </button>)}
+            {selectedSellerCoverageRow && liveAreas.some(area => !sellerCoverageRows.some(saved => saved.areaId === area.id)) && <button type="button" onClick={() => setSelected(null)}><span>Add another area</span><small>Choose from currently available service areas</small></button>}
+          </div>}
+          <form key={selectedSellerCoverageRow?.areaId ?? "new-coverage"} className="portal-form" onSubmit={saveSellerCoverage}>
             <label>
               Service area
-              <select name="areaId">
-                {liveAreas.map((area) => (
+              <select name="areaId" disabled={!!selectedSellerCoverageRow} required defaultValue={selectedSellerCoverageRow?.areaId ?? ""}>
+                {!selectedSellerCoverageRow && <option value="" disabled>Choose an area</option>}
+                {selectedSellerCoverageRow && <option value={selectedSellerCoverageRow.areaId}>{selectedSellerCoverageRow.name}</option>}
+                {!selectedSellerCoverageRow && liveAreas.filter(area => !sellerCoverageRows.some(saved => saved.areaId === area.id)).map((area) => (
                   <option key={area.id} value={area.id}>
                     {area.name}
                   </option>
                 ))}
               </select>
+              {selectedSellerCoverageRow && <input type="hidden" name="areaId" value={selectedSellerCoverageRow.areaId} />}
             </label>
             <div className="form-grid">
               <label>
@@ -9080,7 +10002,9 @@ export default function NanasPortal({
                   type="number"
                   min="0"
                   max="500"
-                  defaultValue="15"
+                  step="0.1"
+                  required
+                  defaultValue={selectedSellerCoverageRow?.radius ?? 15}
                 />
               </label>
               <label>
@@ -9089,15 +10013,17 @@ export default function NanasPortal({
                   name="travelFee"
                   type="number"
                   min="0"
-                  defaultValue="0"
+                  step="0.01"
+                  required
+                  defaultValue={selectedSellerCoverageRow?.travelFee ?? 0}
                 />
               </label>
             </div>
             <label>
-              <input name="active" type="checkbox" defaultChecked /> Active
+              <input name="active" type="checkbox" defaultChecked={selectedSellerCoverageRow?.active ?? true} /> Active
               coverage
             </label>
-            <button type="submit">Save coverage</button>
+            <button type="submit" disabled={!selectedSellerCoverageRow && !liveAreas.some(area => !sellerCoverageRows.some(saved => saved.areaId === area.id))}>Save coverage</button>
           </form>
         </>
       );
@@ -9108,8 +10034,8 @@ export default function NanasPortal({
             icon={<Stethoscope />}
             title={
               selectedCatalogService
-                ? "Configure healthcare service"
-                : "Add healthcare service"
+                ? "Configure care or household service"
+                : "Add care or household service"
             }
             copy="Changes affect new discovery and requests only; historical bookings keep their service and pricing snapshots."
           />
@@ -9149,7 +10075,7 @@ export default function NanasPortal({
                 required
                 defaultValue={
                   selectedCatalogService?.description ??
-                  "Personally delivered healthcare or approved healthcare-support service in The Bahamas."
+                  "Personally delivered care or household support in The Bahamas."
                 }
               />
             </label>
@@ -9196,7 +10122,7 @@ export default function NanasPortal({
                 placeholder="Record why this catalog change is appropriate."
               />
             </label>
-            <button type="submit">Save healthcare service</button>
+            <button type="submit">Save service</button>
           </form>
         </>
       );
@@ -9210,7 +10136,7 @@ export default function NanasPortal({
                 ? "Configure Bahamas service area"
                 : "Add Bahamas service area"
             }
-            copy="Active areas appear in buyer request builders and seller coverage. Existing bookings retain their original area."
+            copy="Active areas appear in buyer request builders and provider coverage. Existing bookings retain their original area."
           />
           <form className="portal-form" onSubmit={saveCatalogArea}>
             <label>
@@ -9451,6 +10377,7 @@ export default function NanasPortal({
               type="button"
               key={option}
               className={selected.includes(option) ? "selected" : ""}
+              aria-pressed={selected.includes(option)}
               onClick={() => toggle(option)}
             >
               <span>
@@ -9512,6 +10439,7 @@ export default function NanasPortal({
                           : ""
                       }
                       onClick={() => setCategory(item)}
+                      aria-pressed={requestDraft.categoryCode === item.code}
                     >
                       <span>
                         {index === 0 ? (
@@ -9552,7 +10480,7 @@ export default function NanasPortal({
                   <h2>Which service are you looking for?</h2>
                   <p>
                     Select the closest match so Nanas can show the request to
-                    the right sellers.
+                    the right providers.
                   </p>
                 </div>
                 <div className="intake-subcategory-grid">
@@ -9565,6 +10493,7 @@ export default function NanasPortal({
                           ? "selected"
                           : ""
                       }
+                      aria-pressed={requestDraft.subcategoryCode === item.code}
                       onClick={() =>
                         setRequestDraft((draft) => ({
                           ...draft,
@@ -9624,7 +10553,7 @@ export default function NanasPortal({
                           <label>
                             Birth month
                             <select
-                              required
+                              required={!recipient.expecting}
                               value={recipient.birthMonth}
                               onChange={(event) =>
                                 updateRequestRecipient(recipient.id, {
@@ -9643,7 +10572,7 @@ export default function NanasPortal({
                           <label>
                             Birth year
                             <select
-                              required
+                              required={!recipient.expecting}
                               value={recipient.birthYear}
                               onChange={(event) =>
                                 updateRequestRecipient(recipient.id, {
@@ -9699,7 +10628,7 @@ export default function NanasPortal({
                     </span>
                     <h2>Who needs care?</h2>
                     <p>
-                      Tell sellers the relationship and general age range
+                      Tell providers the relationship and general age range
                       without sharing a diagnosis.
                     </p>
                   </div>
@@ -9776,6 +10705,7 @@ export default function NanasPortal({
                       >
                         <option value="">Choose</option>
                         {[
+                          "18–29",
                           "30s",
                           "40s",
                           "50s",
@@ -9854,7 +10784,7 @@ export default function NanasPortal({
                         <label>
                           Breed
                           <input
-                            required
+                            required={!pet.mixedBreed}
                             value={pet.breed}
                             onChange={(event) =>
                               updateRequestPet(pet.id, {
@@ -9991,15 +10921,15 @@ export default function NanasPortal({
                         }
                       >
                         {[
-                          "Under 1,000",
-                          "1,001–1,500",
-                          "1,501–2,000",
-                          "2,001–2,500",
-                          "2,501–3,000",
-                          "3,001–3,500",
-                          "Over 3,500",
-                        ].map((value) => (
-                          <option key={value}>{value}</option>
+                          ["under_1000", "Under 1,000"],
+                          ["1001_1500", "1,001–1,500"],
+                          ["1501_2000", "1,501–2,000"],
+                          ["2001_2500", "2,001–2,500"],
+                          ["2501_3000", "2,501–3,000"],
+                          ["3001_3500", "3,001–3,500"],
+                          ["over_3500", "Over 3,500"],
+                        ].map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
                         ))}
                       </select>
                     </label>
@@ -10119,7 +11049,7 @@ export default function NanasPortal({
                         <MapPin />
                       </span>
                       <b>{area.name}</b>
-                      <small>Approved sellers covering this area</small>
+                      <small>Approved providers covering this area</small>
                       <i>
                         <Check />
                       </i>
@@ -10165,6 +11095,7 @@ export default function NanasPortal({
                         }))
                       }
                     >
+                      <option value="" disabled>Choose an island</option>
                       {liveIslands.map((island) => (
                         <option key={island.id} value={island.id}>
                           {island.name}
@@ -10211,10 +11142,18 @@ export default function NanasPortal({
                       }
                     />
                   </label>
+                  <label className="full">
+                    Emergency contact for this booking (optional)
+                    <select value={requestDraft.emergencyContactId} onChange={(event) => setRequestDraft((draft) => ({ ...draft, emergencyContactId: event.target.value }))}>
+                      <option value="">No emergency contact selected</option>
+                      {emergencyContacts.filter((contact) => contact.consentConfirmed).map((contact) => <option key={contact.id} value={contact.id}>{contact.name} · {contact.relationship}</option>)}
+                    </select>
+                    <small>Contact details remain private and are available only to the eligible provider during the active booking. Manage contacts under Care recipients.</small>
+                  </label>
                 </div>
                 <div className="privacy-note">
                   <ShieldCheck />
-                  Only the confirmed eligible seller receives the precise
+                  Only the confirmed eligible provider receives the precise
                   address.
                 </div>
               </>
@@ -10269,12 +11208,13 @@ export default function NanasPortal({
                       type="date"
                       required
                       value={requestDraft.startsAt.slice(0, 10)}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
                         setRequestDraft((draft) => ({
                           ...draft,
-                          startsAt: `${event.target.value}T${draft.startsAt.slice(11, 16) || "09:00"}`,
-                        }))
-                      }
+                          startsAt: `${value}T${draft.startsAt.slice(11, 16) || "09:00"}`,
+                        }));
+                      }}
                     />
                   </label>
                   {requestDraft.scheduleKind === "recurring" && (
@@ -10284,12 +11224,13 @@ export default function NanasPortal({
                         type="date"
                         min={requestDraft.startsAt.slice(0, 10)}
                         value={requestDraft.endDate}
-                        onChange={(event) =>
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
                           setRequestDraft((draft) => ({
                             ...draft,
-                            endDate: event.target.value,
-                          }))
-                        }
+                            endDate: value,
+                          }));
+                        }}
                       />
                     </label>
                   )}
@@ -10324,6 +11265,7 @@ export default function NanasPortal({
                       <button
                         type="button"
                         key={day}
+                        aria-pressed={requestDraft.weekdays.includes(index)}
                         className={
                           requestDraft.weekdays.includes(index)
                             ? "selected"
@@ -10347,6 +11289,7 @@ export default function NanasPortal({
                       <button
                         type="button"
                         key={value}
+                        aria-pressed={requestDraft.timePeriods.includes(value)}
                         className={
                           requestDraft.timePeriods.includes(value)
                             ? "selected"
@@ -10431,7 +11374,7 @@ export default function NanasPortal({
                       ? "Cleaning extras and supplies"
                       : requestDraft.categoryCode === "tutoring"
                         ? "Learning and tutor preferences"
-                        : "Ideal seller qualities"}
+                        : "Ideal provider qualities"}
                   </h2>
                   <p>These optional filters help narrow the best matches.</p>
                 </div>
@@ -10488,7 +11431,7 @@ export default function NanasPortal({
                   <span>
                     <ClipboardCheck /> The essentials
                   </span>
-                  <h2>What should sellers know?</h2>
+                  <h2>What should providers know?</h2>
                   <p>
                     Describe the routine and practical needs. Do not include
                     diagnoses or highly sensitive information.
@@ -10534,6 +11477,7 @@ export default function NanasPortal({
                         min="1"
                         required
                         value={requestDraft.minRate}
+                        step="0.01"
                         onChange={(event) =>
                           setRequestDraft((draft) => ({
                             ...draft,
@@ -10552,6 +11496,7 @@ export default function NanasPortal({
                         min={requestDraft.minRate}
                         required
                         value={requestDraft.maxRate}
+                        step="0.01"
                         onChange={(event) =>
                           setRequestDraft((draft) => ({
                             ...draft,
@@ -10569,6 +11514,7 @@ export default function NanasPortal({
                         type="number"
                         min="0"
                         value={requestDraft.budget}
+                        step="0.01"
                         onChange={(event) =>
                           setRequestDraft((draft) => ({
                             ...draft,
@@ -10587,7 +11533,7 @@ export default function NanasPortal({
                   <span>
                     <BadgeCheck /> Choose how to publish
                   </span>
-                  <h2>Post free or reach sellers faster?</h2>
+                  <h2>Post free or reach providers faster?</h2>
                   <p>
                     Your first job is free. Later postings use plans whose fee
                     and duration are controlled by Nanas admins.
@@ -10597,7 +11543,7 @@ export default function NanasPortal({
                   {adminOps.postingPlans
                     .filter((plan) => plan.active)
                     .map((plan) => {
-                      const unavailable = plan.fee === 0 && !freeEligible;
+                      const unavailable = plan.fee === 0 ? !freeEligible : !demoMode && !simulationAllowed;
                       return (
                         <button
                           type="button"
@@ -10621,7 +11567,7 @@ export default function NanasPortal({
                           <i>
                             <Check />
                           </i>
-                          {unavailable && <em>Free posting already used</em>}
+                          {unavailable && <em>{plan.fee === 0 ? "Free posting already used" : "Paid posting is not connected"}</em>}
                         </button>
                       );
                     })}
@@ -10637,7 +11583,7 @@ export default function NanasPortal({
                   <h2>Does everything look right?</h2>
                   <p>
                     Review the safe summary before matching with eligible
-                    sellers.
+                    providers. {chosenPlan.fee > 0 && (demoMode || simulationAllowed ? "This records a test payment only. No real money is charged." : "Paid posting is not connected; nothing will be charged or published.")}
                   </p>
                 </div>
                 <div className="care-review-card">
@@ -10684,6 +11630,11 @@ export default function NanasPortal({
                     </button>
                   </div>
                   <div>
+                    <span><ShieldCheck /></span>
+                    <p><small>Emergency contact</small><b>{emergencyContacts.find((contact) => contact.id === requestDraft.emergencyContactId)?.name ?? "Not selected"}</b></p>
+                    <button type="button" onClick={() => setRequestStep(4)}>Edit</button>
+                  </div>
+                  <div>
                     <span>
                       <CalendarDays />
                     </span>
@@ -10691,7 +11642,7 @@ export default function NanasPortal({
                       <small>Schedule</small>
                       <b>
                         {requestDraft.scheduleKind === "recurring"
-                          ? `${requestDraft.weekdays.map((day) => weekdayOptions[day]).join(", ")} · ${requestDraft.useSpecificTimes ? `${requestDraft.startTime}–${requestDraft.endTime}` : requestDraft.timePeriods.join(", ")}`
+                          ? `${requestDraft.startsAt.slice(0, 10)}${requestDraft.endDate ? `–${requestDraft.endDate}` : " onward"} · ${requestDraft.weekdays.map((day) => weekdayOptions[day]).join(", ")} · ${requestDraft.useSpecificTimes ? `${requestDraft.startTime}–${requestDraft.endTime}` : requestDraft.timePeriods.join(", ")}`
                           : `${requestDraft.startsAt.slice(0, 10)} · ${requestDraft.startTime}–${requestDraft.endTime}`}
                       </b>
                     </p>
@@ -10751,7 +11702,7 @@ export default function NanasPortal({
                 ? "Posting…"
                 : requestStep === 11
                   ? chosenPlan.fee > 0
-                    ? `Pay ${money(chosenPlan.fee)} & post`
+                    ? `Simulate ${money(chosenPlan.fee)} payment & post`
                     : "Post free request"
                   : "Continue"}
               <ChevronRight />
@@ -10861,7 +11812,7 @@ export default function NanasPortal({
                         {index === 0
                           ? "Daily support and companionship"
                           : index === 1
-                            ? "Qualified healthcare at home"
+                            ? "Qualified home healthcare"
                             : index === 2
                               ? "Support after leaving hospital"
                               : index === 3
@@ -10983,7 +11934,7 @@ export default function NanasPortal({
                           Birth month
                           <select
                             aria-label={`Birth month for ${recipient.label}`}
-                            required={recipient.relationship === "child"}
+                            required={recipient.relationship === "child" && !recipient.expecting}
                             value={recipient.birthMonth}
                             onChange={(event) =>
                               updateRequestRecipient(recipient.id, {
@@ -11006,7 +11957,7 @@ export default function NanasPortal({
                           Birth year
                           <select
                             aria-label={`Birth year for ${recipient.label}`}
-                            required={recipient.relationship === "child"}
+                            required={recipient.relationship === "child" && !recipient.expecting}
                             value={recipient.birthYear}
                             onChange={(event) =>
                               updateRequestRecipient(recipient.id, {
@@ -11064,7 +12015,7 @@ export default function NanasPortal({
                   <h2>What kind of help would be useful?</h2>
                   <p>
                     Select the support that matters most. This becomes part of
-                    the safe seller summary.
+                    the safe provider summary.
                   </p>
                 </div>
                 <div className="care-need-grid">
@@ -11117,7 +12068,7 @@ export default function NanasPortal({
                         <MapPin />
                       </span>
                       <b>{area.name}</b>
-                      <small>Approved sellers covering this area</small>
+                      <small>Approved providers covering this area</small>
                       <i>
                         <Check />
                       </i>
@@ -11214,7 +12165,7 @@ export default function NanasPortal({
                 </div>
                 <div className="privacy-note">
                   <ShieldCheck />
-                  Only an eligible seller receives the precise address at the
+                  Only an eligible provider receives the precise address at the
                   appropriate booking stage.
                 </div>
               </>
@@ -11276,12 +12227,13 @@ export default function NanasPortal({
                       type="date"
                       required
                       value={requestDraft.startsAt.slice(0, 10)}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        const value = event.currentTarget.value;
                         setRequestDraft((draft) => ({
                           ...draft,
-                          startsAt: `${event.target.value}T${draft.startsAt.slice(11, 16) || "09:00"}`,
-                        }))
-                      }
+                          startsAt: `${value}T${draft.startsAt.slice(11, 16) || "09:00"}`,
+                        }));
+                      }}
                     />
                   </label>
                   {requestDraft.scheduleKind === "recurring" && (
@@ -11291,12 +12243,13 @@ export default function NanasPortal({
                         type="date"
                         min={requestDraft.startsAt.slice(0, 10)}
                         value={requestDraft.endDate}
-                        onChange={(event) =>
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
                           setRequestDraft((draft) => ({
                             ...draft,
-                            endDate: event.target.value,
-                          }))
-                        }
+                            endDate: value,
+                          }));
+                        }}
                       />
                     </label>
                   )}
@@ -11337,6 +12290,7 @@ export default function NanasPortal({
                       <button
                         type="button"
                         key={day}
+                        aria-pressed={requestDraft.weekdays.includes(index)}
                         className={
                           requestDraft.weekdays.includes(index)
                             ? "selected"
@@ -11360,6 +12314,7 @@ export default function NanasPortal({
                       <button
                         type="button"
                         key={value}
+                        aria-pressed={requestDraft.timePeriods.includes(value)}
                         className={
                           requestDraft.timePeriods.includes(value)
                             ? "selected"
@@ -11439,7 +12394,7 @@ export default function NanasPortal({
                   <span>
                     <ClipboardCheck /> Just the essentials
                   </span>
-                  <h2>What should sellers know?</h2>
+                  <h2>What should providers know?</h2>
                   <p>
                     Describe the routine, communication preferences, and
                     practical support needed. Avoid diagnoses or highly
@@ -11475,7 +12430,7 @@ export default function NanasPortal({
                   </span>
                   <h2>What price range works for you?</h2>
                   <p>
-                    Enter the hourly range sellers should quote within. You can
+                    Enter the hourly range providers should quote within. You can
                     still compare itemized offers.
                   </p>
                 </div>
@@ -11542,7 +12497,7 @@ export default function NanasPortal({
                     <ShieldCheck /> You approve every quote before payment
                   </span>
                   <small>
-                    No seller can charge outside an accepted, itemized quote.
+                    No provider can charge outside an accepted, itemized quote.
                   </small>
                 </div>
               </>
@@ -11553,7 +12508,7 @@ export default function NanasPortal({
                   <span>
                     <BadgeCheck /> Choose how to publish
                   </span>
-                  <h2>Post free or reach sellers faster?</h2>
+                  <h2>Post free or reach providers faster?</h2>
                   <p>
                     Every buyer receives one free posting. Additional postings
                     use an admin-configured plan and duration.
@@ -11563,7 +12518,7 @@ export default function NanasPortal({
                   {adminOps.postingPlans
                     .filter((plan) => plan.active)
                     .map((plan) => {
-                      const unavailable = plan.fee === 0 && !freeEligible;
+                      const unavailable = plan.fee === 0 ? !freeEligible : !demoMode && !simulationAllowed;
                       return (
                         <button
                           type="button"
@@ -11587,7 +12542,7 @@ export default function NanasPortal({
                           <i>
                             <Check />
                           </i>
-                          {unavailable && <em>Free posting already used</em>}
+                          {unavailable && <em>{plan.fee === 0 ? "Free posting already used" : "Paid posting is not connected"}</em>}
                         </button>
                       );
                     })}
@@ -11596,7 +12551,7 @@ export default function NanasPortal({
                   <CircleDollarSign />
                   {chosenPlan.fee === 0
                     ? "No payment is required for this posting."
-                    : `${money(chosenPlan.fee)} simulated payment will be confirmed when you publish.`}
+                    : demoMode || simulationAllowed ? `${money(chosenPlan.fee)} test payment will be recorded when you publish. No real money is charged.` : "Paid posting is not connected. No payment will be taken."}
                 </div>
               </>
             )}
@@ -11608,7 +12563,7 @@ export default function NanasPortal({
                   </span>
                   <h2>Does everything look right?</h2>
                   <p>
-                    Your request goes only to eligible approved sellers who
+                    Your request goes only to eligible approved providers who
                     match the service, area and schedule.
                   </p>
                 </div>
@@ -11619,7 +12574,7 @@ export default function NanasPortal({
                     </span>
                     <p>
                       <small>Care type</small>
-                      <b>{chosenService?.name ?? "Healthcare care"}</b>
+                      <b>{chosenService?.name ?? "Care service"}</b>
                     </p>
                     <button type="button" onClick={() => setRequestStep(0)}>
                       Edit
@@ -11745,7 +12700,7 @@ export default function NanasPortal({
                 ? "Posting…"
                 : requestStep === 9
                   ? chosenPlan.fee > 0
-                    ? `Pay ${money(chosenPlan.fee)} & post`
+                    ? `Simulate ${money(chosenPlan.fee)} payment & post`
                     : "Post free request"
                   : "Continue"}
               <ChevronRight />
@@ -11806,14 +12761,14 @@ export default function NanasPortal({
           <ModalHead
             icon={<MessageCircle />}
             title="New secure message"
-            copy="Keep healthcare coordination inside the booking conversation."
+            copy="Keep care coordination inside the booking conversation."
           />
           <form className="portal-form" onSubmit={sendMessage}>
             <label>
               Message
               <textarea name="body" maxLength={4000} required />
             </label>
-            <button type="submit">Send message</button>
+            <button type="submit" disabled={busy}>{busy ? "Sending…" : "Send message"}</button>
           </form>
         </>
       );
@@ -11844,7 +12799,7 @@ export default function NanasPortal({
                 placeholder="Share clear, respectful feedback about the completed care."
               />
             </label>
-            <button type="submit">Submit verified review</button>
+            <button disabled={busy} type="submit">{busy ? "Submitting…" : "Submit verified review"}</button>
           </form>
         </>
       );
@@ -11903,18 +12858,66 @@ export default function NanasPortal({
           </div>
           <TaskList
             items={[
-              "Quote accepted and simulated payment captured",
+              "Payment references and refunds remain in the financial records",
               `Booking status: ${selectedBooking.status.replaceAll("_", " ")}`,
-              selectedBooking.status === "completed"
-                ? "Seller funds released to simulated wallet"
-                : "Funds remain protected until eligible completion",
+              selectedBooking.refundAmount
+                ? `Recorded refund: ${money(selectedBooking.refundAmount)}`
+                : "Check the wallet ledger for settlement; booking status alone is not a balance",
+              ...(selectedBooking.status === "cancelled" ? [selectedBooking.cancellationFee === undefined
+                ? "Cancellation fee could not be loaded. Refresh financial records before relying on this summary."
+                : `Recorded cancellation fee: ${money(selectedBooking.cancellationFee)}`] : []),
             ]}
           />
+          {role !== "admin" && (role === "buyer" || ["confirmed", "in_progress", "completion_pending"].includes(selectedBooking.status)) && (
+            <div className="booking-dispute-summary">
+              <h3>Emergency contact</h3>
+              {!bookingEmergencyContact || bookingEmergencyContact.bookingId !== selectedBooking.id ? (
+                <button disabled={bookingEmergencyLoading} onClick={() => loadBookingEmergencyContact(selectedBooking.id)}>{bookingEmergencyLoading ? "Loading audited contact…" : "Load emergency contact"}</button>
+              ) : bookingEmergencyContact.configured && bookingEmergencyContact.contact ? (
+                <>
+                  <p><b>{bookingEmergencyContact.contact.name}</b> · {bookingEmergencyContact.contact.relationship}</p>
+                  <a href={`tel:${bookingEmergencyContact.contact.phone}`}>{bookingEmergencyContact.contact.phone}</a>
+                  <small>{bookingEmergencyContact.accessLogId ? `Access logged · ${bookingEmergencyContact.accessLogId}` : "Local demo access"}</small>
+                </>
+              ) : <p>No consented emergency contact is configured for this booking.</p>}
+              <small>Use only for this care booking. Nanas is not an emergency service; call local emergency services when needed.</small>
+            </div>
+          )}
+          {role !== "admin" && (
+            <div className="booking-dispute-summary visit-update-panel">
+              <h3>Private visit updates</h3>
+              <p>Booking participants can review provider updates here. Notification previews never include the private note.</p>
+              {visitUpdateTimeline?.bookingId !== selectedBooking.id ? (
+                <button disabled={visitUpdateLoading} onClick={() => loadVisitUpdates(selectedBooking.id)}>{visitUpdateLoading ? "Loading visit updates…" : "Load visit updates"}</button>
+              ) : visitUpdateTimeline.updates.length ? (
+                <div className="visit-update-list">
+                  {visitUpdateTimeline.updates.map((update) => <article key={update.id}>
+                    <div><b>{update.updateType.replaceAll("_", " ")}</b><small>{dateTime(update.occurredAt)}</small></div>
+                    <p>{update.note}</p>
+                  </article>)}
+                </div>
+              ) : <p>No visit updates have been shared for this booking.</p>}
+              {role === "seller" && selectedBooking.status === "in_progress" && (
+                <form className="portal-form visit-update-form" onSubmit={postVisitUpdate}>
+                  <label>Update type<select name="updateType" required defaultValue="activity"><option value="arrival">Arrival</option><option value="activity">Activity completed</option><option value="meal">Meal or household routine</option><option value="wellbeing">General wellbeing</option><option value="departure">Departure</option><option value="other">Other visit update</option></select></label>
+                  <label>Private update<textarea name="note" required minLength={2} maxLength={500} placeholder="Share a brief factual update about the agreed visit. Do not add diagnoses, payment details, passwords, or unrelated private information." /></label>
+                  <button disabled={busy} type="submit">{busy ? "Sharing…" : "Share with buyer"}</button>
+                </form>
+              )}
+              <small>For routine visit coordination only. Use the urgent safety action or local emergency services when needed.</small>
+            </div>
+          )}
+          {state.disputes.filter((item) => item.bookingId === selectedBooking.id).map((item) => <div className="booking-dispute-summary" key={item.id}>
+            <h3>Service dispute {status(item.status)}</h3>
+            <p>{item.reason.replaceAll("_", " ")}: {item.summary}</p>
+            <small>Case {item.id}</small>
+            {item.resolution && <p>Admin update: {item.resolution}</p>}
+          </div>)}
           {selectedBooking.status === "confirmed" && role !== "admin" && (
             <div className="session-code-box">
               {role === "buyer" && (
                 <>
-                  <button onClick={() => generateSessionCode(selectedBooking)}>
+                  <button disabled={busy} onClick={() => generateSessionCode(selectedBooking)}>
                     Generate 6-digit visit code
                   </button>
                   {state.sessionCodes[selectedBooking.id] && (
@@ -11939,17 +12942,19 @@ export default function NanasPortal({
                       name="code"
                       inputMode="numeric"
                       pattern="[0-9]{6}"
+                      maxLength={6}
+                      autoComplete="off"
                       required
                     />
                   </label>
-                  <button type="submit">Verify code & check in</button>
+                  <button disabled={busy} type="submit">{busy ? "Verifying…" : "Verify code & check in"}</button>
                 </form>
               )}
             </div>
           )}
           <div className="modal-action-grid">
             {role !== "admin" && selectedBooking.status === "confirmed" && (
-              <button onClick={() => setModal("cancel-booking")}>
+              <button onClick={() => loadCancellationPreview(selectedBooking)}>
                 Preview cancellation
               </button>
             )}
@@ -11979,17 +12984,21 @@ export default function NanasPortal({
         </>
       );
     if (modal === "cancel-booking" && selectedBooking) {
-      const preview = cancellationPreview(selectedBooking);
+      const estimate = cancellationEstimate?.bookingId === selectedBooking.id ? cancellationEstimate : null;
+      const preview = backendConnected ? estimate && { fee: estimate.feeMinor / 100, refund: estimate.refundMinor / 100, feePercent: estimate.feePercent } : cancellationPreview(selectedBooking);
       return (
         <>
           <ModalHead
             icon={<Ban />}
             title="Preview booking cancellation"
-            copy="The connected command recalculates the snapshotted cancellation rule and posts matching refund ledger entries."
+            copy="Review the server-verified fee and simulated refund. If the fee changes before confirmation, you must review it again."
           />
-          <div className="quote-breakdown">
+          {cancellationLoading && <p role="status">Loading the current cancellation amounts…</p>}
+          {cancellationError && <p role="alert">{cancellationError}</p>}
+          {!preview && !cancellationLoading && <button disabled={busy} onClick={() => loadCancellationPreview(selectedBooking)}>Retry cancellation preview</button>}
+          {preview && <div className="quote-breakdown">
             <span>
-              Protected payment<b>{money(selectedBooking.total)}</b>
+              Protected payment<b>{money(estimate ? estimate.capturedMinor / 100 : selectedBooking.total)}</b>
             </span>
             <span>
               Cancellation fee ({preview.feePercent}%)
@@ -11998,19 +13007,19 @@ export default function NanasPortal({
             <span className="total">
               Refund<b>{money(preview.refund)}</b>
             </span>
-          </div>
+          </div>}
           <form className="portal-form" onSubmit={cancelBooking}>
             <label>
               Cancellation reason
-              <select name="reason">
+              <select name="reason" defaultValue={role === "seller" ? "seller_unavailable" : "buyer_schedule_changed"}>
                 <option value="buyer_schedule_changed">Schedule changed</option>
-                <option value="seller_unavailable">Seller unavailable</option>
+                <option value="seller_unavailable">Provider unavailable</option>
                 <option value="care_need_changed">Care need changed</option>
                 <option value="safety_concern">Safety concern</option>
               </select>
             </label>
-            <button disabled={busy} type="submit">
-              Confirm cancellation & simulated refund
+            <button disabled={busy || cancellationLoading || !preview} type="submit">
+              {busy ? "Cancelling…" : "Confirm cancellation & simulated refund"}
             </button>
           </form>
         </>
@@ -12022,7 +13031,7 @@ export default function NanasPortal({
           <ModalHead
             icon={<LifeBuoy />}
             title="Open a service dispute"
-            copy="A dispute preserves evidence and holds eligible simulated funds for reasoned admin review."
+            copy="An admin will review your case. Unreleased funds remain protected; money already released is not automatically held."
           />
           <form className="portal-form" onSubmit={openDispute}>
             <label>
@@ -12044,7 +13053,7 @@ export default function NanasPortal({
                 required
               />
             </label>
-            <button type="submit">Open dispute & hold funds</button>
+            <button disabled={busy} type="submit">{busy ? "Opening dispute…" : "Open dispute for review"}</button>
           </form>
         </>
       );
@@ -12136,12 +13145,7 @@ export default function NanasPortal({
             <label>
               Decision
               <select name="moderationAction">
-                <option value="allow">Allow content</option>
-                <option value="warn">Warn account</option>
-                <option value="limit">Limit visibility</option>
-                <option value="remove">Remove content</option>
-                <option value="restrict">Restrict account</option>
-                <option value="escalate">Escalate for specialist review</option>
+                {moderationActionsForTarget(selectedModeration?.targetType).map(([value,label])=><option key={value} value={value}>{label}</option>)}
               </select>
             </label>
             <label>
@@ -12162,7 +13166,8 @@ export default function NanasPortal({
               Private operations note
               <textarea name="privateNote" maxLength={2000} />
             </label>
-            <button type="submit">Record moderation decision</button>
+            <p>Allowing a report does not approve provider identity or restore a restricted account. Account restrictions require additional permission.</p>
+            <button type="submit" disabled={busy || !selectedModeration}>{busy?"Saving…":"Record moderation decision"}</button>
           </form>
         </>
       );
@@ -12197,6 +13202,8 @@ export default function NanasPortal({
           </form>
         </>
       );
+    if (modal === "message-audit" && backendConnected && selected)
+      return <AdminMessageAudit key={`${currentUserId}:${selected}`} conversationId={selected} adminUserId={currentUserId}/>;
     if (modal === "message-audit")
       return (
         <>
@@ -12240,6 +13247,7 @@ export default function NanasPortal({
         </>
       );
     if (modal === "message-upgrade") {
+      if (!demoMode && !simulationAllowed) return <ModalHead icon={<LockKeyhole />} title="Paid messaging is not available yet" copy="Checkout has not been enabled. No payment has been taken. Please contact support for help with your booking." />;
       const plan =
         adminOps.postingPlans.find(
           (item) => item.code === "premium" && item.active,
@@ -12249,13 +13257,13 @@ export default function NanasPortal({
           <ModalHead
             icon={<LockKeyhole />}
             title="Unlock secure messaging"
-            copy="Review the price before simulating payment. No raw card data is stored in this demo."
+            copy="TEST ONLY: unlock this conversation with a simulated payment. No real money is charged."
           />
           <form className="portal-form" onSubmit={simulateMessageUpgrade}>
             <div className="info-banner">
               <CircleDollarSign />
               <div>
-                <b>{plan.name}</b>
+                <b>Conversation access</b>
                 <span>{money(plan.fee)} BSD · one simulated checkout</span>
               </div>
             </div>
@@ -12265,7 +13273,7 @@ export default function NanasPortal({
                 <option value="demo-card">Demo card ending 4242</option>
               </select>
             </label>
-            <button type="submit">Simulate {money(plan.fee)} payment & unlock</button>
+            <button type="submit" disabled={busy}>{busy ? "Processing…" : <>Simulate {money(plan.fee)} payment & unlock</>}</button>
           </form>
         </>
       );
@@ -12307,6 +13315,10 @@ export default function NanasPortal({
       </>
     );
   }
+}
+
+function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+  return <section className="portal-panel"><header><h2>{title}</h2>{action}</header>{children}</section>;
 }
 
 function ModalHead({

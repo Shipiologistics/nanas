@@ -77,3 +77,15 @@ export function formatFromMime(mimeType: string) {
   if (normalized === "image/gif") return "gif";
   return null;
 }
+
+export function cloudinaryPublicIdPrefix(kind: ImageUploadKind, userId: string) {
+  const policy = IMAGE_UPLOAD_POLICIES[kind];
+  const visibility = policy.deliveryType === "upload" ? "public" : "private";
+  return `nanas/${visibility}/users/${userId}/${policy.folder}/`;
+}
+
+export function isOwnedCloudinaryPublicId(kind: ImageUploadKind, userId: string, publicId: string) {
+  const prefix = cloudinaryPublicIdPrefix(kind, userId);
+  return publicId.startsWith(prefix)
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(publicId.slice(prefix.length));
+}

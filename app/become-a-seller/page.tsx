@@ -1,2 +1,5 @@
-import { BecomeSellerPage } from "../marketplace/PublicMarketplacePages";
-export default BecomeSellerPage;
+import { permanentRedirect } from "next/navigation";
+
+export default function LegacyBecomeSellerPage() {
+  permanentRedirect("/become-a-provider");
+}

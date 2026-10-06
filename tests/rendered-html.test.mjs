@@ -15,7 +15,7 @@ before(async () => {
     ["node_modules/next/dist/bin/next", "start", "-H", "127.0.0.1", "-p", String(port)],
     {
       cwd: projectRoot,
-      env: { ...process.env, NODE_ENV: "production" },
+      env: { ...process.env, NODE_ENV: "production", ENABLE_DEMO_MODE: "true" },
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -52,18 +52,94 @@ async function render(pathname) {
 }
 
 async function html(pathname) {
-  const response = await render(pathname);
+  const useDemo = pathname.startsWith("/app/") || pathname.startsWith("/providers/") || pathname.startsWith("/services/") || pathname === "/find-care";
+  const response = await render(useDemo ? `${pathname}${pathname.includes("?") ? "&" : "?"}demo=1` : pathname);
   assert.equal(response.status, 200, `${pathname} should render successfully`);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   return response.text();
 }
+
+test("non-demo workspaces do not server-render private demo data", async () => {
+  for (const role of ["buyer", "seller", "admin"]) {
+    const response = await render(`/app/${role}/overview`);
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.match(body, /Checking your account/);
+    assert.doesNotMatch(body, /Carla B\.|Alicia M\.|Local simulation/);
+  }
+  assert.equal((await render("/app/unknown/overview")).status, 404);
+  assert.equal((await render("/app/buyer/not-a-section?demo=1")).status, 404);
+  assert.equal((await render("/providers/not-a-provider")).status, 404);
+  assert.equal((await render("/providers/alicia-m")).status, 404, "sample profile is not a live public fallback");
+});
+
+test("production disables explicit demo access unless server opt-in is enabled", async () => {
+  const lockedPort = port + 1;
+  const lockedServer = spawn(process.execPath, ["node_modules/next/dist/bin/next", "start", "-H", "127.0.0.1", "-p", String(lockedPort)], {
+    cwd: projectRoot, env: { ...process.env, NODE_ENV: "production", ENABLE_DEMO_MODE: "false" }, stdio: "ignore",
+  });
+  try {
+    const deadline = Date.now() + 20_000;
+    let ready = false;
+    while (Date.now() < deadline) {
+      if (lockedServer.exitCode !== null) throw new Error("Locked-down test server exited early");
+      try { if ((await fetch(`http://127.0.0.1:${lockedPort}/auth`)).ok) { ready = true; break; } } catch { /* Wait for the isolated production server. */ }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(ready, true);
+    const portal = await (await fetch(`http://127.0.0.1:${lockedPort}/app/admin/overview?demo=1`)).text();
+    assert.match(portal, /Checking your account/);
+    assert.doesNotMatch(portal, /Local simulation|Nanas Operations/);
+    const auth = await (await fetch(`http://127.0.0.1:${lockedPort}/auth`)).text();
+    assert.doesNotMatch(auth, /Buyer demo|Admin demo|Local full-flow testing/i);
+  } finally { lockedServer.kill("SIGTERM"); }
+});
+
+test("upload APIs reject unauthenticated mutations", async () => {
+  for (const action of ["sign", "verify", "delete"]) {
+    const response = await fetch(`http://127.0.0.1:${port}/api/uploads/images/${action}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    assert.equal(response.status, 401, `${action} must require authentication`);
+  }
+});
+
+test("public illustrative requests are not presented as live or verified buyers", async () => {
+  const listing = await html("/care-requests");
+  const detail = await html("/care-requests/senior-care-nassau-morning");
+  assert.match(listing, /Illustrative examples—not live care requests/);
+  assert.match(listing, /Dates, budgets and quote counts are sample information/);
+  assert.match(detail, /Illustrative example—not a live care request/);
+  assert.match(detail, /This example cannot be booked or quoted/);
+  assert.match(detail, /Sign in to browse live requests/);
+  assert.doesNotMatch(detail, /Identity verified|Payment method ready|Posted care request/);
+});
+
+test("missing public request and service pages return real 404 responses with recovery links", async () => {
+  for (const [path,link] of [["/care-requests/qa-nonexistent-request","/care-requests"],["/services/qa-nonexistent-service?demo=1","/services"]]) {
+    const response=await render(path);
+    assert.equal(response.status,404);
+    const body=await response.text();
+    assert.match(body,/We could not find/);
+    assert.ok(body.includes(`href="${link}"`));
+    assert.match(body,/name="robots" content="noindex"/);
+  }
+});
+
+test("verification evidence API rejects anonymous reads", async () => {
+  const response = await fetch(`http://127.0.0.1:${port}/api/verification/evidence`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+  });
+  assert.equal(response.status, 401);
+  assert.match(response.headers.get("cache-control"), /no-store/);
+});
 
 test("renders the Nanas Bahamas healthcare landing and authentication experiences", async () => {
   const [home, auth] = await Promise.all([html("/"), html("/auth")]);
 
   assert.match(
     home,
-    /<title>Nanas \| Trusted healthcare at home in The Bahamas<\/title>/i,
+    /<title>Nanas \| Trusted care, close to home in The Bahamas<\/title>/i,
   );
   assert.match(home, /Trusted care/i);
   assert.match(home, /close to home/i);
@@ -75,12 +151,15 @@ test("renders the Nanas Bahamas healthcare landing and authentication experience
   assert.match(auth, /Welcome back\./i);
   assert.match(auth, /Local full-flow testing/i);
   assert.match(auth, /Create account/i);
-  assert.match(auth, /Phone/i);
+  // Inspect rendered controls, not bundled component/source strings in RSC scripts.
+  const authMarkup = auth.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+  assert.match(authMarkup, /<button\b[^>]*>Email<\/button>/);
+  assert.doesNotMatch(authMarkup, /<button\b[^>]*>Phone<\/button>/, "the connected QA project has phone auth disabled");
   assert.match(auth, /one-time sign-in/i);
   assert.match(auth, /Forgot password/i);
   assert.match(
     auth,
-    /Supabase is connected|Supabase keys are not configured yet/i,
+    /Supabase is configured|Supabase keys are not configured yet/i,
   );
 });
 
@@ -109,9 +188,9 @@ test("renders dedicated buyer, seller, and admin workspaces", async () => {
   assert.match(buyer, /Buyer navigation/i);
   assert.doesNotMatch(buyer, /buyer workspace/i);
 
-  assert.match(buyerFind, /Filter sellers by area/i);
+  assert.match(buyerFind, /Filter providers by area/i);
   assert.match(buyerFind, /Smart search · Beta/i);
-  assert.match(buyerFind, /Advanced healthcare seller filters/i);
+  assert.match(buyerFind, /Advanced healthcare provider filters|Advanced provider filters/i);
   assert.match(buyerFind, /Pay rate/i);
   assert.match(buyerFind, /Employment type/i);
   assert.match(buyerFind, /Years of experience/i);
@@ -119,12 +198,13 @@ test("renders dedicated buyer, seller, and admin workspaces", async () => {
   assert.match(buyerFind, /Languages spoken/i);
   assert.match(buyerFind, /Reset[\s\S]{0,40}filters/i);
 
-  assert.match(buyerFavorites, /Favorite sellers/i);
-  assert.match(buyerFavorites, /Saved approved seller/i);
+  assert.match(buyerFavorites, /My Nanas/i);
+  assert.match(buyerFavorites, /Saved provider/i);
+  assert.match(buyerFavorites, /Saving someone is not a booking or a verification badge/i);
   assert.match(buyerFavorites, /View full profile/i);
   assert.match(buyerFavorites, /Request care/i);
 
-  assert.match(seller, /Seller workspace/i);
+  assert.match(seller, /Provider workspace/i);
   assert.match(seller, /Browse matching requests/i);
   assert.match(seller, /Approved to provide care/i);
 
@@ -143,14 +223,14 @@ test("renders dedicated buyer, seller, and admin workspaces", async () => {
   assert.match(sellerServices, /of 3 service profiles/i);
   assert.match(sellerServices, /Every category has its own About section/i);
 
-  assert.match(admin, /Healthcare marketplace control centre\./i);
+  assert.match(admin, /Care marketplace control centre\./i);
   assert.match(admin, /KYC queue/i);
   assert.match(admin, /Open disputes/i);
   assert.match(admin, />Users</i);
   assert.match(admin, /Message audit/i);
   assert.match(admin, />admin</i);
-  assert.doesNotMatch(admin, /<div class="role-switch"[^>]*>[\s\S]*?>buyer</i);
-  assert.doesNotMatch(admin, /<div class="role-switch"[^>]*>[\s\S]*?>seller</i);
+  assert.match(admin, /Local simulation/i);
+  assert.match(admin, /Test Nanas as a role/i);
 });
 
 test("renders Care.com-inspired seller profiles and detailed care-request pages", async () => {
@@ -163,19 +243,24 @@ test("renders Care.com-inspired seller profiles and detailed care-request pages"
     ]);
 
   assert.match(profile, /Alicia M\./i);
-  assert.match(profile, /Healthcare seller profile/i);
+  assert.match(profile, /Provider profile/i);
   assert.match(profile, /About[\s\S]{0,40}Alicia/i);
   assert.match(profile, /I provide calm and dependable senior care/i);
   assert.match(profile, /Credentials/i);
-  assert.match(profile, /Care qualification for[\s\S]{0,80}Senior care/i);
+  assert.match(profile, /Provider-described capability for[\s\S]{0,80}Senior care/i);
+  assert.doesNotMatch(profile, /identity verification state is current|Speaks your language/i);
+  assert.equal((profile.match(/<main\b/g) ?? []).length, 1);
   assert.match(profile, /Senior care/i);
-  assert.match(profile, /Home nursing/i);
-  assert.match(profile, /Post-hospital care/i);
+  assert.match(profile, /Home healthcare|Home nursing/i);
+  assert.match(profile, /Housekeeping|Post-hospital care/i);
   assert.match(profile, /Services/i);
   assert.match(profile, /Rates/i);
   assert.match(profile, /Other ways[\s\S]{0,60}Alicia[\s\S]{0,60}can help/i);
   assert.match(profile, /Availability/i);
-  assert.match(profile, /Available dates/i);
+  assert.match(profile, /Recurring hours by date/i);
+  assert.match(profile, /not live booking availability/i);
+  assert.match(profile, /America\/Nassau/i);
+  assert.doesNotMatch(profile, /Full-time jobs|Part-time jobs|role="gridcell"/i);
   assert.match(profile, /Previous month/i);
   assert.match(profile, /Next month/i);
   assert.match(profile, /Profile details/i);
@@ -185,13 +270,14 @@ test("renders Care.com-inspired seller profiles and detailed care-request pages"
   assert.match(profile, /Safety/i);
   assert.match(profile, /Communication and booking protection/i);
   assert.match(profile, /Reviews/i);
-  assert.match(profile, /Contact[\s\S]{0,40}Alicia/i);
+  assert.match(profile, /Post a care request/i);
+  assert.match(profile, /not sent only to/i);
 
-  assert.match(publicProfile, /Home nursing/i);
+  assert.match(publicProfile, /Home healthcare/i);
   assert.match(publicProfile, /Senior care/i);
-  assert.match(publicProfile, /Post-hospital care/i);
+  assert.match(publicProfile, /Housekeeping/i);
   assert.match(publicProfile, /Alicia M\./i);
-  assert.match(publicProfile, /Healthcare seller profile/i);
+  assert.match(publicProfile, /Provider profile/i);
   assert.match(publicProfile, /6[\s\S]{0,40}years work experience/i);
   assert.match(publicProfile, /Availability/i);
   assert.match(publicProfile, /Communication and booking protection/i);
@@ -203,14 +289,14 @@ test("renders Care.com-inspired seller profiles and detailed care-request pages"
   assert.match(buyerRequest, /Buyer activity/i);
   assert.match(buyerRequest, /Maximum care budget/i);
 
-  assert.match(sellerRequest, /Post-hospital care/i);
+  assert.match(sellerRequest, /Home healthcare|Post-hospital care/i);
   assert.match(sellerRequest, /support in/i);
   assert.match(sellerRequest, /Make an offer/i);
   assert.match(sellerRequest, /Buyer budget/i);
   assert.match(sellerRequest, /Request statistics/i);
 });
 
-test("renders the complete public healthcare marketplace as dedicated pages", async () => {
+test("renders the complete public care and household marketplace as dedicated pages", async () => {
   const [
     services,
     service,
@@ -223,26 +309,26 @@ test("renders the complete public healthcare marketplace as dedicated pages", as
     seller,
   ] = await Promise.all([
     html("/services"),
-    html("/services/home-nursing"),
+    html("/services/home-healthcare"),
     html("/find-care"),
     html("/care-requests"),
     html("/care-requests/senior-care-nassau-morning"),
     html("/post-care-request"),
     html("/how-it-works"),
     html("/safety"),
-    html("/become-a-seller"),
+    html("/become-a-provider"),
   ]);
 
   assert.match(services, /Choose the support that fits real life/i);
-  assert.match(services, /Post-hospital care/i);
-  assert.match(service, /Home nursing, arranged around real life/i);
+  assert.match(services, /Child care/i);
+  assert.match(service, /Home healthcare, arranged around real life/i);
   assert.match(service, /Choose the support you need/i);
   assert.match(directory, /Every card opens a complete profile page/i);
-  assert.match(directory, /href="\/providers\/alicia-m"/i);
-  assert.match(requests, /Open care requests/i);
+  assert.match(directory, /href="\/providers\/alicia-m\?demo=1"/i);
+  assert.match(requests, /Example care requests/i);
   assert.match(requests, /Request preview/i);
   assert.match(request, /About this care request/i);
-  assert.match(request, /Sign in to send a quote/i);
+  assert.match(request, /Sign in to browse live requests/i);
   assert.match(post, /Tell us about the care/i);
   assert.match(post, /Save draft and continue securely/i);
   assert.match(how, /Built for three roles only/i);
@@ -264,8 +350,12 @@ test("renders the complete public healthcare marketplace as dedicated pages", as
     assert.match(page, /href="\/find-care"/i);
     assert.match(page, /href="\/care-requests"/i);
     assert.match(page, /href="\/how-it-works"/i);
-    assert.match(page, /href="\/become-a-seller"/i);
+    assert.match(page, /href="\/become-a-provider"/i);
   }
+
+  const legacyProviderPage = await fetch(`http://127.0.0.1:${port}/become-a-seller`, { redirect: "manual" });
+  assert.equal(legacyProviderPage.status, 308);
+  assert.equal(legacyProviderPage.headers.get("location"), "/become-a-provider");
 });
 
 test("seller discovery uses full profile routes rather than seller profile dialogs", async () => {
@@ -274,9 +364,10 @@ test("seller discovery uses full profile routes rather than seller profile dialo
     readFile(new URL("../app/app/NanasPortal.tsx", import.meta.url), "utf8"),
   ]);
 
-  assert.match(home, /href=\{`\/providers\//);
+  assert.match(home, /Find available providers/);
+  assert.doesNotMatch(home, /href=\{`\/providers\//);
   assert.doesNotMatch(home, /setSelectedSeller|seller-modal/);
-  assert.match(portal, /profileHref=\{["`]\/app\/buyer\/providers\//);
+  assert.match(portal, /profileHref=\{portalHref\("buyer", `providers\//);
   assert.doesNotMatch(
     portal,
     /setModal\("seller-profile"\)|modal === "seller-profile"/,
@@ -334,19 +425,19 @@ test("buyer care requests collect recipients, location, schedule, pricing, and p
     "Which days and times?",
     "Add specific times instead",
     "Minimum hourly rate",
-    "Post free or reach sellers faster?",
+    "Post free or reach providers faster?",
     "Free posting already used",
   ])
     assert.match(portal, new RegExp(copy.replace(/[?]/g, "\\?"), "i"));
 
   assert.match(portal, /Step \{requestStep \+ 1\} of \{steps\.length\}/);
-  assert.match(portal, /simulated_payment_confirmed: chosenPlan\.fee > 0/);
+  assert.match(portal, /simulated_payment_confirmed: \(demoMode \|\| simulationAllowed\) && chosenPlan\.fee > 0/);
   assert.match(portal, /adminCommand\("upsert_job_posting_plan"/);
   assert.match(css, /Buyer wizard readability floor/);
   assert.match(css, /font-size:\s*14px/);
 });
 
-test("buyer request intake covers all six Care.com service families and their distinct questions", async () => {
+test("buyer request intake covers all six Nanas service families and their distinct questions", async () => {
   const portal = await readFile(
     new URL("../app/app/NanasPortal.tsx", import.meta.url),
     "utf8",
@@ -369,7 +460,7 @@ test("buyer request intake covers all six Care.com service families and their di
   for (const category of [
     "Child care",
     "Senior care",
-    "Adult care",
+    "Home healthcare",
     "Pet care",
     "Housekeeping",
     "Tutoring",
@@ -508,7 +599,7 @@ test("database contract enforces the three-role healthcare marketplace and core 
     "submit_verified_review",
     "admin_user_action",
     "admin_review_verification",
-    "admin_conversation_messages",
+    "admin_conversation_message_page",
     "open_service_dispute",
     "create_support_case",
     "generate_session_code",

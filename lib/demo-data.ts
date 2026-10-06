@@ -1,6 +1,7 @@
 export type DemoRole = "buyer" | "seller" | "admin";
 export type DemoSellerService = {
   id: string;
+  slug?: string;
   name: string;
   rate: number;
   rateMax?: number;
@@ -10,9 +11,11 @@ export type DemoSellerService = {
   additionalHelp?: string[];
 };
 export type DemoUser = {
+  publicSlug?: string;
   id: string; name: string; email: string; role: DemoRole;
   status: "active" | "restricted" | "suspended" | "closed"; avatar: string; avatarUrl?: string;
   sellerDetails?: {
+    published?: boolean;
     headline?: string; locality?: string; island?: string;
     rating: number; reviewCount: number; completedBookings: number;
     responseRate?: number; badges?: string[];
@@ -27,11 +30,17 @@ export type DemoUser = {
   };
 };
 export type DemoQuote = { id: string; requestId: string; sellerId: string; sellerName: string; rate: number; travel: number; fee: number; total: number; message: string; status: "pending" | "accepted" | "declined" };
-export type DemoRequest = { id: string; buyerId: string; buyerName: string; service: string; area: string; mode?: "scheduled" | "on_demand"; startsAt: string; endsAt: string; summary: string; budget: number; status: "requested" | "offered" | "confirmed" | "expired"; quotes: DemoQuote[] };
-export type DemoBooking = { id: string; reference: string; requestId: string; buyerId: string; buyerName: string; sellerId: string; sellerName: string; service: string; startsAt: string; endsAt: string; status: "confirmed" | "in_progress" | "completion_pending" | "completed" | "cancelled" | "disputed"; total: number; sellerNet: number; cancellationFee?: number; refundAmount?: number; conversationId: string; reviewedBy: string[] };
+export type DemoRequest = {
+  id: string; buyerId: string; buyerName: string; service: string; area: string;
+  mode?: "scheduled" | "on_demand"; startsAt: string; endsAt: string;
+  schedule?: { kind: "recurring" | "one_time"; startDate: string; endDate?: string | null; flexibleStart: boolean; weekdays: number[]; timePeriods: string[]; specificStart?: string | null; specificEnd?: string | null; scheduleMayVary: boolean; timezone: string };
+  createdAt?: string; publishedUntil?: string | null; featured?: boolean; quoteCount?: number; hasQuoted?: boolean;
+  summary: string; budget: number; status: "requested" | "offered" | "confirmed" | "expired"; quotes: DemoQuote[];
+};
+export type DemoBooking = { id: string; reference: string; requestId: string; buyerId: string; buyerName: string; sellerId: string; sellerName: string; service: string; startsAt: string; endsAt: string; completedAt?: string; status: "confirmed" | "in_progress" | "completion_pending" | "completed" | "cancelled" | "disputed" | "resolved"; total: number; sellerNet: number; cancellationFee?: number; refundAmount?: number; conversationId: string; reviewedBy: string[] };
 export type DemoMessage = { id: string; conversationId: string; senderId: string; senderName: string; body: string; at: string };
-export type DemoKyc = { id: string; sellerId: string; sellerName: string; type: string; status: "pending" | "needs_information" | "approved" | "rejected"; fileName: string; submittedAt: string };
-export type DemoDispute = { id: string; bookingId: string; openedBy: string; reason: string; summary: string; status: "open" | "resolved"; resolution?: string };
+export type DemoKyc = { id: string; sellerId: string; sellerName: string; type: string; status: "pending" | "needs_information" | "approved" | "rejected"; fileName: string; submittedAt: string; decisionReason?: string };
+export type DemoDispute = { id: string; bookingId: string; openedBy: string; reason: string; summary: string; status: "open" | "escalated" | "resolved"; resolution?: string };
 export type DemoSupportCase = { id: string; openedBy: string; category: string; subject: string; status: "open" | "awaiting_user" | "resolved"; createdAt: string };
 export type DemoSafetyIncident = { id: string; bookingId?: string; reporterId: string; category: string; status: "open" | "acknowledged" | "resolved"; createdAt: string };
 export type DemoPrivacyRequest = { id: string; userId: string; type: "export" | "delete"; status: "open" | "processing" | "completed"; createdAt: string };
@@ -48,7 +57,7 @@ export type DemoState = {
   safetyIncidents: DemoSafetyIncident[];
   privacyRequests: DemoPrivacyRequest[];
   moderationReports: DemoModerationReport[];
-  notifications: { id: string; userId: string; text: string; read: boolean; at: string }[];
+  notifications: { id: string; userId: string; text: string; read: boolean; at: string; deepLink?: string }[];
   sessionCodes: Record<string, string>;
   payouts: { id: string; sellerId: string; amount: number; status: "scheduled" | "paid"; createdAt: string }[];
 };
@@ -57,7 +66,7 @@ export const demoUsers: DemoUser[] = [
   { id: "buyer-carla", name: "Carla B.", email: "buyer@nanas.bs", role: "buyer", status: "active", avatar: "CB" },
   { id: "seller-alicia", name: "Alicia M.", email: "seller@nanas.bs", role: "seller", status: "active", avatar: "AM", sellerDetails: {
     headline: "Registered nurse providing thoughtful care at home", locality: "Nassau", island: "New Providence",
-    rating: 4.9, reviewCount: 18, completedBookings: 46, responseRate: 96, badges: ["Top care seller", "Credentials current"],
+    rating: 4.9, reviewCount: 18, completedBookings: 46, responseRate: 96, badges: ["Top care provider", "Credentials current"],
     languages: ["English", "Bahamian Creole"], vaccinations: ["COVID-19 vaccinated", "Influenza vaccinated"], additionalDetails: ["Does not smoke", "Comfortable with pets", "Has reliable transportation"],
     availabilityUpdatedAt: "2026-08-20T14:00:00Z", availability: [1,2,3,4,5,6].map((weekday) => ({ weekday, start: "06:00", end: "23:00", timezone: "America/Nassau" })),
     credentials: [{ type: "Registered nurse licence", issuingBody: "The Bahamas Nursing Council", verifiedAt: "2026-07-18T12:00:00Z" }, { type: "CPR and first aid", verifiedAt: "2026-06-04T12:00:00Z" }],

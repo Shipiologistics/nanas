@@ -143,6 +143,15 @@ main {
   font: inherit;
 }
 
+.nanas-home .hero-subtitle {
+  max-width: 560px;
+  margin: -6px auto 20px;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
 .nanas-home .hero-mode-toggle {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -464,6 +473,49 @@ main {
 
 .nanas-home .care-section {
   padding-top: 140px;
+  padding-bottom: 112px;
+  background: linear-gradient(180deg, #fff 0%, #f7fbfa 100%);
+}
+
+.nanas-home .home-heading-copy {
+  display: flex;
+  max-width: 560px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 22px;
+}
+
+.nanas-home .home-heading-copy p {
+  margin: 0;
+  color: #526d6d;
+  font-size: 17px;
+  line-height: 1.7;
+}
+
+.nanas-home .home-heading-copy a,
+.nanas-home .request-copy > a,
+.nanas-home .results-topline > a {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid currentColor;
+  color: #1e4b4c;
+  font-size: 14px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.nanas-home .home-heading-copy a svg,
+.nanas-home .request-copy > a svg,
+.nanas-home .results-topline > a svg {
+  width: 16px;
+  height: 16px;
+}
+
+.nanas-home .service-grid {
+  gap: 18px;
+  margin-top: 58px;
 }
 
 .nanas-home .service-card,
@@ -478,8 +530,105 @@ main {
 }
 
 .nanas-home .service-card {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+  padding: 0;
+  border-color: #dce8e5;
+  border-radius: 22px;
+  background: #fff;
   color: inherit;
   text-decoration: none;
+}
+
+.nanas-home .service-card:hover {
+  border-color: #a8cfca;
+  transform: translateY(-4px);
+}
+
+.nanas-home .service-card-media {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 218px;
+  overflow: hidden;
+  background: #d9e9e4;
+}
+
+.nanas-home .service-card-media::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(12, 42, 43, 0.05),
+    rgba(12, 42, 43, 0.48)
+  );
+  content: "";
+}
+
+.nanas-home .service-card-media img {
+  object-fit: cover;
+  transition: transform 0.35s ease;
+}
+
+.nanas-home .service-card:hover .service-card-media img {
+  transform: scale(1.04);
+}
+
+.nanas-home .service-mark {
+  position: absolute;
+  z-index: 2;
+  top: 16px;
+  left: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  box-shadow: 0 14px 30px rgba(15, 55, 56, 0.16);
+}
+
+.nanas-home .service-card-copy {
+  width: 100%;
+  min-height: 178px;
+  padding: 22px;
+}
+
+.nanas-home .service-card-meta {
+  color: #5f7777;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1.45;
+  text-transform: uppercase;
+}
+
+.nanas-home .service-card-copy strong {
+  color: #173f40;
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.nanas-home .service-card-copy small {
+  color: #5f7374;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.nanas-home .round-arrow {
+  position: absolute;
+  z-index: 2;
+  top: 16px;
+  right: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.88);
+  color: #173f40;
+  backdrop-filter: blur(12px);
+}
+
+.nanas-home .round-arrow svg {
+  width: 17px;
+  height: 17px;
 }
 
 .nanas-home .profile-footer a,
@@ -501,23 +650,217 @@ main {
   font-weight: 800;
 }
 
+.nanas-home .home-request-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.86fr);
+  gap: clamp(28px, 5vw, 76px);
+  align-items: center;
+  padding: 112px clamp(24px, 6.4vw, 104px);
+  background: #f3f7f4;
+}
+
+.nanas-home .request-photo {
+  position: relative;
+  min-height: 500px;
+  overflow: hidden;
+  border-radius: 28px;
+  background: #dcebe7;
+}
+
+.nanas-home .request-photo::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 55%, rgba(11, 38, 39, 0.28));
+  content: "";
+}
+
+.nanas-home .request-photo img {
+  object-fit: cover;
+}
+
+.nanas-home .request-copy h2 {
+  max-width: 620px;
+  margin: 22px 0 0;
+  color: #1e4b4c;
+  font-size: clamp(42px, 4.2vw, 64px);
+  font-weight: 760;
+  letter-spacing: 0;
+  line-height: 1.02;
+}
+
+.nanas-home .request-copy p {
+  max-width: 590px;
+  margin: 24px 0 0;
+  color: #526d6d;
+  font-size: 17px;
+  line-height: 1.72;
+}
+
+.nanas-home .request-points {
+  display: grid;
+  gap: 10px;
+  margin: 28px 0;
+}
+
+.nanas-home .request-points span {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  border-top: 1px solid #d9e4e2;
+  color: #294f50;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.nanas-home .nanas-match-section {
+  padding: 112px clamp(24px, 6.4vw, 104px);
+  background: #f7fbfa;
+}
+
+.nanas-home .nanas-match-section .heading-row > p {
+  align-self: end;
+  color: #526d6d;
+}
+
+.nanas-home .feature-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 54px;
+}
+
+.nanas-home .feature-card {
+  min-height: 220px;
+  padding: 24px;
+  border: 1px solid #dce8e5;
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(25, 68, 69, 0.035);
+}
+
+.nanas-home .feature-card h3 {
+  margin: 0 0 14px;
+  color: #173f40;
+  font-size: 21px;
+  letter-spacing: 0;
+}
+
+.nanas-home .feature-card p {
+  margin: 0;
+  color: #607576;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
 .nanas-home .how-section {
-  background: #f7faf9;
+  background: #fff;
+}
+
+.nanas-home .how-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.82fr) minmax(0, 1fr);
+  gap: clamp(30px, 6vw, 92px);
+  align-items: center;
+}
+
+.nanas-home .how-photo {
+  position: relative;
+  min-height: 620px;
+  overflow: hidden;
+  border-radius: 30px;
+  background: #d9e9e4;
+}
+
+.nanas-home .how-photo::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 60%, rgba(6, 40, 41, 0.24));
+  content: "";
+}
+
+.nanas-home .how-photo img {
+  object-fit: cover;
+  object-position: center;
+}
+
+.nanas-home .how-section .section-heading h2 {
+  max-width: 760px;
+}
+
+.nanas-home .how-section .section-heading p {
+  max-width: 650px;
+  margin: 22px 0 0;
+  color: #607576;
+  font-size: 16px;
+  line-height: 1.7;
 }
 
 .nanas-home .steps-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+  margin-top: 36px;
 }
 
 .nanas-home .step-card {
-  padding: 26px !important;
+  display: flex;
+  min-height: 218px;
+  flex-direction: column;
+  padding: 24px !important;
   border: 1px solid #dfe8e5 !important;
   border-radius: 20px !important;
   background: #fff;
 }
 
+.nanas-home .step-card > span {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border-radius: 14px;
+  background: #e2f3f0;
+  color: #1e4b4c;
+}
+
+.nanas-home .step-card > span svg {
+  width: 21px;
+  height: 21px;
+}
+
+.nanas-home .step-card h3 {
+  margin: 24px 0 10px;
+}
+
 .nanas-home .seller-cta {
-  background: linear-gradient(140deg, #d9eeec, #eef7f5);
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.62)),
+    url("/nanas/hero-seller-wide.png") center / cover no-repeat;
+}
+
+.nanas-home .profile-photo img {
+  object-fit: cover;
+}
+
+.nanas-home .profile-photo::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 52%, rgba(8, 38, 39, 0.44));
+  content: "";
+}
+
+.nanas-home .profile-photo > span,
+.nanas-home .profile-availability {
+  z-index: 2;
+}
+
+.nanas-home .profile-photo > span {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  width: 58px;
+  height: 58px;
+  border-width: 3px;
+  border-radius: 16px;
+  font-size: 18px;
 }
 
 @media (max-width: 1023px) {
@@ -544,6 +887,20 @@ main {
     border-color: rgba(255, 255, 255, 0.62);
     background: rgba(255, 255, 255, 0.08);
     color: #fff;
+  }
+
+  .nanas-home .home-request-section,
+  .nanas-home .how-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .nanas-home .feature-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .nanas-home .request-photo,
+  .nanas-home .how-photo {
+    min-height: 460px;
   }
 }
 
@@ -593,8 +950,17 @@ main {
 
   .nanas-home .hero h1 {
     margin-bottom: 8px;
-    font-size: 26px;
+    max-width: 320px;
+    font-size: 24px;
     line-height: 0.94;
+    text-wrap: balance;
+  }
+
+  .nanas-home .hero-subtitle {
+    max-width: 300px;
+    margin: -2px auto 8px;
+    font-size: 13px;
+    line-height: 1.2;
   }
 
   .nanas-home .hero-mode-toggle {
@@ -751,13 +1117,81 @@ main {
 
   .nanas-home .care-section {
     padding-top: 90px;
+    padding-bottom: 72px;
+  }
+
+  .nanas-home .section-heading h2,
+  .nanas-home .results-topline h2,
+  .nanas-home .how-section h2,
+  .nanas-home .safety-copy h2,
+  .nanas-home .seller-cta h2,
+  .nanas-home .faq-section h2 {
+    max-width: 100%;
+    font-size: 36px;
+    line-height: 1.06;
+    overflow-wrap: break-word;
+  }
+
+  .nanas-home .home-heading-copy {
+    gap: 16px;
   }
 
   .nanas-home .service-card {
-    grid-template-columns: auto 1fr;
+    border-radius: 18px;
+  }
+
+  .nanas-home .service-card-media {
+    height: 190px;
+  }
+
+  .nanas-home .service-card-copy {
+    min-height: 0;
+    padding: 18px;
   }
 
   .nanas-home .service-card .round-arrow {
-    display: none;
+    display: flex;
+  }
+
+  .nanas-home .home-request-section {
+    padding: 72px 20px;
+  }
+
+  .nanas-home .nanas-match-section {
+    padding: 72px 20px;
+  }
+
+  .nanas-home .feature-grid {
+    grid-template-columns: 1fr;
+    margin-top: 28px;
+  }
+
+  .nanas-home .feature-card {
+    min-height: 0;
+    padding: 20px;
+  }
+
+  .nanas-home .request-photo,
+  .nanas-home .how-photo {
+    min-height: 330px;
+    border-radius: 20px;
+  }
+
+  .nanas-home .request-copy h2 {
+    font-size: 40px;
+  }
+
+  .nanas-home .steps-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .nanas-home .step-card {
+    min-height: 0;
+  }
+
+  .nanas-home .seller-cta {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.72)),
+      url("/nanas/hero-seller-mobile.webp") center / cover no-repeat;
   }
 }

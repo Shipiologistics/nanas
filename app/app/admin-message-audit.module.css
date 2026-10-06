@@ -1,0 +1,11 @@
+.root { min-width: 0; color: #24342f; overflow-wrap: anywhere; }
+.root > p { line-height: 1.6; }
+.root code { font-size: .8rem; overflow-wrap: anywhere; }
+.root button { min-height: 44px; white-space: normal; }
+.notice { padding: 12px; border: 1px solid #bd7468; border-radius: 10px; background: #fff2ee; color: #782f24; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.messages { list-style: none; padding: 0; display: grid; gap: 12px; }
+.messages li { min-width: 0; padding: 14px; border: 1px solid #cfddd5; border-radius: 12px; background: #f5f9f6; }
+.messages header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: .8rem; }
+.messages li > p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
+@media (max-width: 600px) { .actions button { flex: 1 1 45%; } .messages li { padding: 10px; } }

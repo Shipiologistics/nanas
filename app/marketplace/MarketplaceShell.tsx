@@ -11,7 +11,7 @@ const links = [
   { href: "/find-care", label: "Find care" },
   { href: "/care-requests", label: "Care requests" },
   { href: "/how-it-works", label: "How it works" },
-  { href: "/become-a-seller", label: "Become a seller" },
+  { href: "/become-a-provider", label: "Become a provider" },
 ];
 
 export function MarketplaceHeader() {
@@ -70,9 +70,9 @@ export function MarketplaceHeader() {
 }
 
 export function MarketplaceFooter() {
-  return <footer className="mp-footer"><div><Link className="mp-wordmark" href="/">Nanas<span>.</span></Link><p>Trusted healthcare at home across The Bahamas.</p><small>Nanas is not an emergency service.</small></div><div><b>Find care</b><Link href="/services">Healthcare services</Link><Link href="/find-care">Healthcare sellers</Link><Link href="/post-care-request">Post care request</Link></div><div><b>Provide care</b><Link href="/care-requests">Browse care requests</Link><Link href="/become-a-seller">Become a seller</Link><Link href="/auth">Seller login</Link></div><div><b>Nanas</b><Link href="/how-it-works">How it works</Link><Link href="/safety">Safety</Link><Link href="/auth">Account</Link></div><div className="mp-footer-bottom">© 2026 Nanas · The Bahamas · BSD pricing</div></footer>;
+  return <footer className="mp-footer"><div><Link className="mp-wordmark" href="/">Nanas<span>.</span></Link><p>Trusted care and household help across The Bahamas.</p><small>Nanas is not an emergency service.</small></div><div><b>Find help</b><Link href="/services">Care and household services</Link><Link href="/find-care">Find a provider</Link><Link href="/post-care-request">Post a request</Link></div><div><b>Provide care</b><Link href="/care-requests">Browse care requests</Link><Link href="/become-a-provider">Become a provider</Link><Link href="/auth">Provider login</Link></div><div><b>Nanas</b><Link href="/how-it-works">How it works</Link><Link href="/safety">Safety</Link><Link href="/auth">Account</Link></div><div className="mp-footer-bottom">© 2026 Nanas · The Bahamas · BSD pricing</div></footer>;
 }
 
-export function MarketplacePage({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`mp-shell ${className}`}><MarketplaceHeader />{children}<MarketplaceFooter /></div>;
+export function MarketplacePage({ children, className = "", liveProviders = false }: { children: ReactNode; className?: string; liveProviders?: boolean }) {
+  return <div className={`mp-shell ${className}`}><MarketplaceHeader /><p className="marketplace-preview-notice">{liveProviders ? "Test marketplace: these profiles come from the connected public directory. Real payments are not enabled." : "Marketplace preview: sample content is illustrative. Real payments are not enabled."}</p>{children}<MarketplaceFooter /></div>;
 }

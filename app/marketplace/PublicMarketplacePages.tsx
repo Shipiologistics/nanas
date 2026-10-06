@@ -1,13 +1,15 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import type { CSSProperties } from "react";
 import {
   careServices,
   publicCareRequests,
-  publicProviders,
   type PublicCareService,
 } from "../../lib/public-marketplace";
 import { MarketplacePage } from "./MarketplaceShell";
 import { PostCareRequestForm } from "./PostCareRequestForm";
+import type { DemoUser } from "../../lib/demo-data";
+import { filterPublicProviders, providerMatchesService } from "../../lib/provider-directory.mjs";
 
 function Hero({
   kicker,
@@ -20,7 +22,7 @@ function Hero({
   mobilePrimaryLabel,
   mobileSecondaryLabel,
   primary = { href: "/post-care-request", label: "Post a care request" },
-  secondary = { href: "/find-care", label: "Find a care seller" },
+  secondary = { href: "/find-care", label: "Find a provider" },
 }: {
   kicker: string;
   title: string;
@@ -75,20 +77,20 @@ function Hero({
 
 const serviceHeroImages: Record<string, string> = {
   "senior-care": "/nanas/hero-services-wide.png",
-  "home-nursing": "/nanas/hero-find-care-wide.png",
-  "post-hospital-care": "/nanas/hero-care-requests-wide.png",
-  "respite-care": "/nanas/hero-how-it-works-wide.png",
-  "disability-care": "/nanas/hero-safety-wide.png",
-  physiotherapy: "/nanas/hero-seller-wide.png",
+  "child-care": "/nanas/hero-home-wide.png",
+  "home-healthcare": "/nanas/hero-find-care-wide.png",
+  housekeeping: "/nanas/hero-care-requests-wide.png",
+  tutoring: "/nanas/hero-how-it-works-wide.png",
+  "pet-care": "/nanas/hero-safety-wide.png",
 };
 
 const serviceHeroMobileImages: Record<string, string> = {
   "senior-care": "/nanas/hero-services-mobile.webp",
-  "home-nursing": "/nanas/hero-find-care-mobile.webp",
-  "post-hospital-care": "/nanas/hero-care-requests-mobile.webp",
-  "respite-care": "/nanas/hero-how-it-works-mobile.webp",
-  "disability-care": "/nanas/hero-safety-mobile.webp",
-  physiotherapy: "/nanas/hero-seller-mobile.webp",
+  "child-care": "/nanas/hero-home-mobile.webp",
+  "home-healthcare": "/nanas/hero-find-care-mobile.webp",
+  housekeeping: "/nanas/hero-care-requests-mobile.webp",
+  tutoring: "/nanas/hero-how-it-works-mobile.webp",
+  "pet-care": "/nanas/hero-safety-mobile.webp",
 };
 
 function SectionHead({
@@ -148,7 +150,7 @@ function ServiceGrid({
           </p>
           <footer>
             <span>
-              From <b>${service.rate}</b> BSD/hr
+              Rates set by each provider
             </span>
             <strong>Explore →</strong>
           </footer>
@@ -159,32 +161,31 @@ function ServiceGrid({
 }
 
 function ProviderGrid({
-  providers = publicProviders,
+  providers, demo = false,
 }: {
-  providers?: typeof publicProviders;
+  providers: DemoUser[]; demo?: boolean;
 }) {
   return (
     <div className="mp-provider-grid">
       {providers.map((provider) => (
         <Link
           className="mp-provider-card"
-          href={`/providers/${provider.id}`}
+          href={`/providers/${encodeURIComponent(provider.publicSlug || provider.id)}${demo ? "?demo=1" : ""}`}
           key={provider.id}
         >
-          <div className="mp-provider-photo">
+          <div className="mp-provider-photo" style={provider.avatarUrl ? {backgroundImage:`url("${provider.avatarUrl}")`,backgroundSize:'cover',backgroundPosition:'center'} : undefined}>
             <span>{provider.avatar}</span>
-            <i>✓ VERIFIED</i>
+            <i>{demo ? "SAMPLE PROFILE" : "APPROVED PROVIDER"}</i>
           </div>
           <div className="mp-provider-body">
             <h3>{provider.name}</h3>
             <p>{provider.sellerDetails?.headline}</p>
             <div className="mp-provider-meta">
               <span>
-                ★ <b>{provider.sellerDetails?.rating}</b> (
-                {provider.sellerDetails?.reviewCount})
+                {provider.sellerDetails?.reviewCount ? <>★ <b>{provider.sellerDetails.rating.toFixed(1)}</b> ({provider.sellerDetails.reviewCount})</> : "No reviews yet"}
               </span>
               <span>
-                from <b>${provider.sellerDetails?.services[0]?.rate}</b>/hr
+                {provider.sellerDetails?.services.some(s=>s.rate>0) ? <>from <b>${Math.min(...provider.sellerDetails.services.map(s=>s.rate).filter(rate=>rate>0))}</b> BSD/hr</> : "Ask for rate"}
               </span>
             </div>
           </div>
@@ -225,19 +226,19 @@ export function ServicesPage() {
         <Hero
           image="/nanas/hero-services-wide.png"
           mobileImage="/nanas/hero-services-mobile.webp"
-          kicker="Healthcare across The Bahamas"
-          title="Care for every day."
-          copy="Explore trusted individual caregivers for everyday support, recovery, respite, mobility, and nursing visits."
-          mobileTitle="Everyday care."
-          mobileCopy="Browse trusted everyday support."
+          kicker="Care and household help across The Bahamas"
+          title="Help for everyday life."
+          copy="Explore trusted individual providers for senior care, child care, home healthcare, housekeeping, tutoring, pet care and more."
+          mobileTitle="Everyday help."
+          mobileCopy="Browse trusted local providers."
           mobilePrimaryLabel="Post care"
-          mobileSecondaryLabel="Find sellers"
+          mobileSecondaryLabel="Find providers"
         />
         <section className="mp-container mp-section">
           <SectionHead
             kicker="Browse care"
             title="Choose the support that fits real life."
-            copy="Each page explains what the service can cover, indicative rates, verified sellers, and how to post a useful care request."
+            copy="Each page explains what the service can cover, indicative rates, verified providers, and how to post a useful care request."
           />
           <ServiceGrid />
         </section>
@@ -252,15 +253,15 @@ export function ServicesPage() {
                 <span>01</span>
                 <h3>Focused visit</h3>
                 <p>
-                  Arrange a defined visit for an appointment, recovery check-in,
-                  mobility session, or short care need.
+                  Arrange a defined visit for care, tutoring, pet care,
+                  housekeeping, errands, or a short household need.
                 </p>
               </article>
               <article className="mp-step">
                 <span>02</span>
                 <h3>Half-day support</h3>
                 <p>
-                  Give a family caregiver breathing room while a trusted seller
+                  Give a family caregiver breathing room while a trusted provider
                   continues familiar routines at home.
                 </p>
               </article>
@@ -268,7 +269,7 @@ export function ServicesPage() {
                 <span>03</span>
                 <h3>Recurring care</h3>
                 <p>
-                  Invite the same approved seller to quote for a repeating
+                  Invite the same approved provider to quote for a repeating
                   schedule and build a dependable rhythm.
                 </p>
               </article>
@@ -276,12 +277,12 @@ export function ServicesPage() {
           </div>
         </section>
         <section className="mp-container mp-long-copy">
-          <h2>Healthcare first. Always.</h2>
+          <h2>Care and household help, together.</h2>
           <div>
             <p>
-              Nanas is exclusively for healthcare and care support delivered by
-              individual sellers. There are no contractors, business profiles,
-              shift-job rosters, or unrelated household gigs.
+              Nanas is for trusted care and household support delivered by
+              individual providers. There are no contractors, business profiles,
+              shift-job rosters, or unverified off-platform jobs.
             </p>
             <p>
               Profiles show approved services, review history, credentials where
@@ -299,25 +300,12 @@ export function ServicesPage() {
   );
 }
 
-export function ServiceDetailPage({ slug }: { slug: string }) {
+export function ServiceDetailPage({ slug, directory, demo = false }: { slug: string; directory: {providers:DemoUser[];error:boolean}; demo?: boolean }) {
   const service = careServices.find((item) => item.slug === slug);
-  if (!service)
-    return (
-      <MarketplacePage>
-        <main className="mp-container mp-page-title">
-          <span className="mp-kicker">Service unavailable</span>
-          <h1>We could not find that healthcare service.</h1>
-          <Link className="mp-inline-link" href="/services">
-            Browse all services →
-          </Link>
-        </main>
-      </MarketplacePage>
-    );
-  const matching = publicProviders.filter((provider) =>
-    provider.sellerDetails?.services.some((item) => item.id === service.slug),
-  );
+  if (!service) notFound();
+  const matching = directory.providers.filter(provider => providerMatchesService(provider,service.slug));
   return (
-    <MarketplacePage>
+    <MarketplacePage liveProviders={!demo}>
       <main>
         <Hero
           image={
@@ -327,13 +315,13 @@ export function ServiceDetailPage({ slug }: { slug: string }) {
             serviceHeroMobileImages[service.slug] ??
             "/nanas/hero-services-mobile.webp"
           }
-          kicker={`${service.name} · from $${service.rate} BSD/hr`}
+          kicker={`${service.name} · Compare provider rates`}
           title={`${service.name}, arranged around real life.`}
-          copy="Compare approved sellers, rates, availability, and experience before you request care."
+          copy="Compare approved providers, rates, availability, and experience before you request care."
           mobileTitle={`${service.name} at home.`}
           mobileCopy="Compare rates and availability."
           mobilePrimaryLabel="Post request"
-          mobileSecondaryLabel="Find sellers"
+          mobileSecondaryLabel="Find providers"
           primary={{
             href: `/post-care-request?service=${service.slug}`,
             label: `Post a ${service.name.toLowerCase()} request`,
@@ -343,7 +331,7 @@ export function ServiceDetailPage({ slug }: { slug: string }) {
           <SectionHead
             kicker="Shape the brief"
             title="Choose the support you need."
-            copy="Share only the practical details sellers need to decide whether the request fits their experience, availability, and approved scope."
+            copy="Share only the practical details providers need to decide whether the request fits their experience, availability, and approved scope."
           />
           <div className="mp-need-grid">
             {service.needs.map((need, index) => (
@@ -370,7 +358,7 @@ export function ServiceDetailPage({ slug }: { slug: string }) {
                   <span>0{index + 1}</span>
                   <h3>{item}</h3>
                   <p>
-                    Shown clearly in the request, seller response, or booking
+                    Shown clearly in the request, provider response, or booking
                     record so both sides know what was agreed.
                   </p>
                 </article>
@@ -380,13 +368,13 @@ export function ServiceDetailPage({ slug }: { slug: string }) {
         </section>
         <section className="mp-container mp-section">
           <SectionHead
-            kicker="Available sellers"
+            kicker="Available providers"
             title={`Meet people offering ${service.name.toLowerCase()}.`}
             copy="Open a full profile to review experience, approved services, badges, rates, availability, and booking-based reviews."
           />
-          <ProviderGrid
-            providers={matching.length ? matching : publicProviders.slice(0, 3)}
-          />
+          {demo && <p className="marketplace-preview-notice">Illustrative sample providers, not live records.</p>}
+          {directory.error ? <div role="alert"><p>Provider directory could not be loaded.</p><Link href={`/services/${slug}`}>Try again</Link></div> : matching.length ? <ProviderGrid providers={matching.slice(0,6)} demo={demo} /> : <p>No published providers currently match this service. You can still post a request.</p>}
+          <Link className="mp-inline-link" href={`/find-care?service=${slug}${demo ? "&demo=1" : ""}`}>See all matching providers →</Link>
         </section>
         <section className="mp-container mp-long-copy">
           <h2>A useful request gets useful responses.</h2>
@@ -404,13 +392,13 @@ export function ServiceDetailPage({ slug }: { slug: string }) {
                 </summary>
                 <p>
                   Yes. Add the preferred days and frequency to the brief.
-                  Sellers can respond with their availability and a clear quote.
+                  Providers can respond with their availability and a clear quote.
                 </p>
               </details>
               <details>
                 <summary>When do I share the exact address?</summary>
                 <p>
-                  Only after an appropriate seller is selected and the booking
+                  Only after an appropriate provider is selected and the booking
                   reaches the secure confirmation stage.
                 </p>
               </details>
@@ -418,7 +406,7 @@ export function ServiceDetailPage({ slug }: { slug: string }) {
                 <summary>Is the displayed rate guaranteed?</summary>
                 <p>
                   No. It is an indicative starting rate. The final BSD quote
-                  depends on timing, duration, scope, and seller availability.
+                  depends on timing, duration, scope, and provider availability.
                 </p>
               </details>
             </div>
@@ -426,7 +414,7 @@ export function ServiceDetailPage({ slug }: { slug: string }) {
         </section>
         <CTA
           title={`Ready to find ${service.name.toLowerCase()}?`}
-          copy="Create a clear request in minutes, then compare responses from approved individual healthcare sellers."
+          copy="Create a clear request in minutes, then compare responses from approved individual providers."
         />
       </main>
     </MarketplacePage>
@@ -435,59 +423,40 @@ export function ServiceDetailPage({ slug }: { slug: string }) {
 
 export function FindCarePage({
   filters = { service: "all", area: "all", sort: "recommended" },
+  directory, demo = false, page = 1,
 }: {
-  filters?: { service: string; area: string; sort: string };
+  filters?: { service: string; area: string; sort: string; search?: string };
+  directory: {providers:DemoUser[];error:boolean}; demo?:boolean; page?:number;
 }) {
-  const providers = publicProviders
-    .filter((provider) => {
-      const details = provider.sellerDetails;
-      const serviceMatch =
-        filters.service === "all" ||
-        details?.services.some((service) => service.id === filters.service);
-      const areaMatch =
-        filters.area === "all" ||
-        `${details?.locality ?? ""} ${details?.island ?? ""}`
-          .toLowerCase()
-          .includes(filters.area.toLowerCase());
-      return serviceMatch && areaMatch;
-    })
-    .sort((left, right) => {
-      if (filters.sort === "highest-rated")
-        return (right.sellerDetails?.rating ?? 0) -
-          (left.sellerDetails?.rating ?? 0);
-      if (filters.sort === "lowest-rate") {
-        const lowest = (provider: (typeof publicProviders)[number]) =>
-          Math.min(
-            ...(provider.sellerDetails?.services.map((service) => service.rate) ?? [Infinity]),
-          );
-        return lowest(left) - lowest(right);
-      }
-      return (right.sellerDetails?.completedBookings ?? 0) -
-        (left.sellerDetails?.completedBookings ?? 0);
-    });
+  const providers: DemoUser[] = filterPublicProviders(directory.providers,filters);
+  const pages = Math.max(1,Math.ceil(providers.length/20));
+  const currentPage = Math.min(pages,Math.max(1,Number.isSafeInteger(page) ? page : 1));
+  const pageHref = (number:number) => `/find-care?${new URLSearchParams({...filters,search:filters.search ?? '',page:String(number),...(demo ? {demo:'1'} : {})})}`;
   return (
-    <MarketplacePage>
+    <MarketplacePage liveProviders={!demo}>
       <main>
         <Hero
           image="/nanas/hero-find-care-wide.png"
           mobileImage="/nanas/hero-find-care-mobile.webp"
-          kicker="Find healthcare sellers"
+          kicker="Find providers"
           title="Find care you trust."
           copy="Compare profiles, rates, availability, experience, and verified reviews."
           mobileTitle="Find trusted care."
-          mobileCopy="Compare verified seller profiles."
+          mobileCopy="Compare approved provider profiles."
           mobilePrimaryLabel="Post request"
-          mobileSecondaryLabel="Browse sellers"
+          mobileSecondaryLabel="Browse providers"
         />
         <section className="mp-container mp-section">
           <SectionHead
-            kicker="Advanced healthcare seller filters"
-            title="Explore verified healthcare profiles."
+            kicker="Advanced provider filters"
+            title="Explore approved provider profiles."
             copy="Every card opens a complete profile page—never a popup—so rates, qualifications, services, badges, and reviews have room to breathe."
           />
-          <form className="mp-filterbar" action="/find-care">
+          <form key={JSON.stringify(filters)} className="mp-filterbar mp-provider-filterbar" action="/find-care">
+            {demo && <input type="hidden" name="demo" value="1" />}
+            <input name="search" aria-label="Search providers" placeholder="Name or service" defaultValue={filters.search ?? ''} />
             <select name="service" aria-label="Service" defaultValue={filters.service}>
-              <option value="all">All healthcare services</option>
+              <option value="all">All services</option>
               {careServices.map((service) => (
                 <option key={service.slug} value={service.slug}>
                   {service.name}
@@ -499,19 +468,22 @@ export function FindCarePage({
               <option value="nassau">Nassau</option>
               <option value="freeport">Freeport</option>
               <option value="abaco">Abaco</option>
+              {!["all", "nassau", "freeport", "abaco"].includes(filters.area) && <option value={filters.area}>{filters.area}</option>}
             </select>
             <select name="sort" aria-label="Sort" defaultValue={filters.sort}>
               <option value="recommended">Recommended</option>
               <option value="highest-rated">Highest rated</option>
               <option value="lowest-rate">Lowest hourly rate</option>
             </select>
-            <button type="submit">Search sellers</button>
+            <button type="submit">Search providers</button>
           </form>
-          <ProviderGrid providers={providers} />
-          {!providers.length && (
+          {demo && <p className="marketplace-preview-notice">Illustrative sample providers, not live records.</p>}
+          {directory.error ? <div className="mp-empty-state" role="alert"><h3>Provider directory could not be loaded.</h3><p>Please try again. No sample profiles have been substituted.</p><Link href={pageHref(currentPage)}>Retry directory</Link></div> : <><p>{providers.length} matching provider{providers.length === 1 ? '' : 's'} · Page {currentPage} of {pages}</p><ProviderGrid providers={providers.slice((currentPage-1)*20,currentPage*20)} demo={demo} /><nav className="mp-directory-pagination" aria-label="Provider result pages">{currentPage>1 && <Link href={pageHref(currentPage-1)}>Previous page</Link>}{currentPage<pages && <Link href={pageHref(currentPage+1)}>Next page</Link>}</nav></>}
+          {!directory.error && !providers.length && (
             <div className="mp-empty-state">
-              <h3>No sellers match these filters.</h3>
+              <h3>No providers match these filters.</h3>
               <p>Try another service or area.</p>
+              <Link href="/find-care">Clear all filters</Link>
             </div>
           )}
         </section>
@@ -534,8 +506,8 @@ export function FindCarePage({
                 <span>02</span>
                 <h3>Shortlist people</h3>
                 <p>
-                  Save profiles that fit the care recipient’s needs before
-                  starting a secure conversation.
+                  Save profiles that fit your family’s needs before starting a
+                  secure conversation.
                 </p>
               </article>
               <article className="mp-step">
@@ -557,61 +529,68 @@ export function FindCarePage({
           <ServiceGrid services={careServices.slice(0, 3)} />
         </section>
         <CTA
-          title="Prefer sellers to come to you?"
-          copy="Post one care request and let suitable healthcare sellers respond with availability and a BSD quote."
+          title="Prefer providers to come to you?"
+          copy="Post one care request and let suitable providers respond with availability and a BSD quote."
         />
       </main>
     </MarketplacePage>
   );
 }
 
-export function CareRequestsPage() {
-  const selected = publicCareRequests[0];
+export function CareRequestsPage({ filters = { service: "all", area: "all", when: "all" } }: { filters?: { service: string; area: string; when: string } }) {
+  const requests = publicCareRequests.filter((request) =>
+    (filters.service === "all" || request.service === filters.service) &&
+    (filters.area === "all" || request.area.includes(filters.area)) &&
+    (filters.when === "all" || (filters.when === "next-week" ? request.when.startsWith("Next week") : !request.when.startsWith("Next week"))),
+  );
+  const selected = requests[0];
   return (
     <MarketplacePage>
       <main>
         <Hero
           image="/nanas/hero-care-requests-wide.png"
           mobileImage="/nanas/hero-care-requests-mobile.webp"
-          kicker="Open care requests"
+          kicker="Example care requests"
           title="Care work that matters."
-          copy="Browse clear requests from families across The Bahamas."
+          copy="Explore examples of care requests. Sign in as a provider to find eligible live opportunities across The Bahamas."
           mobileTitle="Care work nearby."
-          mobileCopy="Browse requests across The Bahamas."
-          mobilePrimaryLabel="Sign in to quote"
-          mobileSecondaryLabel="Become a seller"
+          mobileCopy="Explore examples, then sign in to find live opportunities."
+          mobilePrimaryLabel="Find live requests"
+          mobileSecondaryLabel="Become a provider"
           primary={{
-            href: "/auth?next=/app/seller/jobs",
-            label: "Sign in to quote",
+            href: "/auth?role=seller&next=/app/seller/requests",
+            label: "Sign in for live requests",
           }}
           secondary={{
-            href: "/become-a-seller",
-            label: "Become a seller",
+            href: "/become-a-provider",
+            label: "Become a provider",
           }}
         />
         <section className="mp-container mp-request-section">
+          <p className="marketplace-preview-notice">Illustrative examples—not live care requests. Dates, budgets and quote counts are sample information. Sign in as a provider to browse eligible live requests.</p>
           <form className="mp-filterbar" action="/care-requests">
-            <select name="service">
-              <option>All care services</option>
+            <select name="service" aria-label="Request service" defaultValue={filters.service}>
+              <option value="all">All care services</option>
               {careServices.map((service) => (
                 <option key={service.slug}>{service.name}</option>
               ))}
             </select>
-            <select name="area">
-              <option>All areas</option>
-              <option>Nassau & Paradise Island</option>
-              <option>Freeport & Lucaya</option>
+            <select name="area" aria-label="Request area" defaultValue={filters.area}>
+              <option value="all">All areas</option>
+              <option value="Nassau">Nassau & Paradise Island</option>
+              <option value="Freeport">Freeport & Lucaya</option>
             </select>
-            <select name="when">
-              <option>Any date</option>
-              <option>This week</option>
-              <option>Next week</option>
+            <select name="when" aria-label="Request date" defaultValue={filters.when}>
+              <option value="all">Any date</option>
+              <option value="this-week">This week</option>
+              <option value="next-week">Next week</option>
             </select>
-            <button>Search requests</button>
+            <button>Search examples</button>
           </form>
           <div className="mp-request-layout">
             <div className="mp-request-list">
-              {publicCareRequests.map((request, index) => (
+              {!requests.length && <div className="mp-empty-state"><h2>No examples match these filters.</h2><Link href="/care-requests">Clear all filters</Link></div>}
+              {requests.map((request, index) => (
                 <Link
                   className={`mp-request-card ${index === 0 ? "active" : ""}`}
                   href={`/care-requests/${request.slug}`}
@@ -634,8 +613,8 @@ export function CareRequestsPage() {
                 </Link>
               ))}
             </div>
-            <aside className="mp-request-preview">
-              <span className="mp-kicker">Request preview</span>
+            {selected && <aside className="mp-request-preview">
+              <span className="mp-kicker">Example request preview</span>
               <h2>{selected.title}</h2>
               <p>{selected.description}</p>
               <div className="mp-pills">
@@ -665,16 +644,16 @@ export function CareRequestsPage() {
                 className="mp-dark-button"
                 href={`/care-requests/${selected.slug}`}
               >
-                View full request →
+                View example request →
               </Link>
-            </aside>
+            </aside>}
           </div>
         </section>
         <CTA
-          title="Provide healthcare through Nanas."
-          copy="Create an individual seller profile, submit the checks for your services, and respond to suitable care requests."
-          href="/become-a-seller"
-          label="Become a seller"
+          title="Provide trusted help through Nanas."
+          copy="Create an individual provider profile, submit the checks for your services, and respond to suitable care requests."
+          href="/become-a-provider"
+          label="Become a provider"
         />
       </main>
     </MarketplacePage>
@@ -683,29 +662,19 @@ export function CareRequestsPage() {
 
 export function CareRequestDetailPage({ slug }: { slug: string }) {
   const request = publicCareRequests.find((item) => item.slug === slug);
-  if (!request)
-    return (
-      <MarketplacePage>
-        <main className="mp-container mp-page-title">
-          <span className="mp-kicker">Request unavailable</span>
-          <h1>This care request is no longer available.</h1>
-          <Link className="mp-inline-link" href="/care-requests">
-            Browse open requests →
-          </Link>
-        </main>
-      </MarketplacePage>
-    );
+  if (!request) notFound();
   return (
     <MarketplacePage>
       <main className="mp-container">
         <div className="mp-job-breadcrumb">
           <Link href="/care-requests">← All care requests</Link>
-          <span>Open · {request.service}</span>
+          <span>Example · {request.service}</span>
         </div>
         <section className="mp-job-layout">
           <article className="mp-job-main">
-            <span className="mp-kicker">Posted care request</span>
+            <span className="mp-kicker">Example care request</span>
             <h1>{request.title}</h1>
+            <p className="marketplace-preview-notice">Illustrative example—not a live care request. Dates, budgets and quote counts are sample information. This example cannot be booked or quoted.</p>
             <p className="mp-job-location">
               ⌖ {request.area} · Exact address shared after confirmation
             </p>
@@ -764,27 +733,27 @@ export function CareRequestDetailPage({ slug }: { slug: string }) {
               ${request.budget} <small>BSD</small>
             </strong>
             <p>
-              Final price is agreed in the seller response and confirmed before
+              Final price is agreed in the provider response and confirmed before
               booking.
             </p>
-            <Link className="mp-dark-button" href="/auth?next=/app/seller/jobs">
-              Sign in to send a quote →
+            <Link className="mp-dark-button" href="/auth?role=seller&next=/app/seller/requests">
+              Sign in to browse live requests →
             </Link>
-            <Link className="mp-light-button" href="/become-a-seller">
-              Become a Nanas seller
+            <Link className="mp-light-button" href="/become-a-provider">
+              Become a Nanas provider
             </Link>
             <hr />
-            <b>Buyer trust signals</b>
+            <b>Before accepting real work</b>
             <ul>
-              <li>✓ Identity verified</li>
-              <li>✓ Payment method ready</li>
-              <li>✓ General area confirmed</li>
+              <li>Review the actual request and agreed scope</li>
+              <li>Confirm the booking details in Nanas</li>
+              <li>Keep communication and payments on the platform</li>
             </ul>
           </aside>
         </section>
         <section className="mp-section">
           <SectionHead
-            kicker="Similar care requests"
+            kicker="Similar example requests"
             title="More ways to make a difference."
           />
           <div className="mp-request-list mp-three-col">
@@ -814,7 +783,7 @@ export function CareRequestDetailPage({ slug }: { slug: string }) {
   );
 }
 
-export function PostCareRequestPage() {
+export function PostCareRequestPage({initialService = "", initialServiceId = ""}: {initialService?: string; initialServiceId?: string}) {
   return (
     <MarketplacePage>
       <main>
@@ -824,11 +793,11 @@ export function PostCareRequestPage() {
           <p>
             Answer a few straightforward questions. Nanas saves the request as a
             private draft, then asks you to sign in before anything can be sent
-            to sellers.
+            to providers.
           </p>
         </section>
         <section className="mp-container mp-form-shell">
-          <PostCareRequestForm />
+          <PostCareRequestForm key={`${initialService}:${initialServiceId}`} initialService={initialService} initialServiceId={initialServiceId} />
           <aside className="mp-side-note">
             <span className="mp-kicker">Before you start</span>
             <h3>Share needs, not private records.</h3>
@@ -865,7 +834,7 @@ export function PostCareRequestPage() {
                 <span>02</span>
                 <h3>Compare responses</h3>
                 <p>
-                  Review individual sellers’ profiles, availability, message,
+                  Review individual providers’ profiles, availability, message,
                   and full BSD quote.
                 </p>
               </article>
@@ -873,7 +842,7 @@ export function PostCareRequestPage() {
                 <span>03</span>
                 <h3>Confirm securely</h3>
                 <p>
-                  Select one seller, agree the final scope, and use the
+                  Select one provider, agree the final scope, and use the
                   simulated protected booking flow.
                 </p>
               </article>
@@ -898,7 +867,7 @@ export function HowItWorksPage() {
           mobileTitle="Care made simple."
           mobileCopy="From need to confirmed visit."
           mobilePrimaryLabel="Post request"
-          mobileSecondaryLabel="Find sellers"
+          mobileSecondaryLabel="Find providers"
         />
         <section className="mp-container mp-section">
           <SectionHead
@@ -930,7 +899,7 @@ export function HowItWorksPage() {
               [
                 "05",
                 "Complete the visit",
-                "Buyer and seller use the booking check-in and completion flow.",
+                "Buyer and provider use the booking check-in and completion flow.",
               ],
               [
                 "06",
@@ -951,8 +920,8 @@ export function HowItWorksPage() {
         <section className="mp-band">
           <div className="mp-container">
             <SectionHead
-              kicker="For sellers"
-              title="A professional way to find suitable care work."
+              kicker="For providers"
+              title="A professional way to find suitable care and household work."
             />
             <div className="mp-steps">
               <article className="mp-step">
@@ -967,8 +936,8 @@ export function HowItWorksPage() {
                 <span>02</span>
                 <h3>Complete verification</h3>
                 <p>
-                  Submit identity, service eligibility, and healthcare
-                  credentials for admin review before public visibility.
+                  Submit identity, service eligibility, and any category
+                  credentials required before public visibility.
                 </p>
               </article>
               <article className="mp-step">
@@ -986,15 +955,15 @@ export function HowItWorksPage() {
           <h2>Built for three roles only.</h2>
           <div>
             <p>
-              <b>Buyers</b> are people arranging healthcare or care support.{" "}
-              <b>Sellers</b> are individual people approved to provide those
+              <b>Buyers</b> are people arranging care or household support.{" "}
+              <b>Providers</b> are individual people approved to provide those
               services. <b>Admins</b> operate trust, safety, KYC, moderation,
               payments, and platform support.
             </p>
             <p>
               There are no contractor accounts, companies, agency pages, generic
               gigs, or shift-employment boards. Every marketplace surface stays
-              centred on healthcare Nanas.
+              centred on trusted help through Nanas.
             </p>
             <div className="mp-faq">
               <details open>
@@ -1008,13 +977,13 @@ export function HowItWorksPage() {
               <details>
                 <summary>Can one account buy and sell?</summary>
                 <p>
-                  The product supports buyer and seller capabilities, but seller
+                  The product supports buyer and provider capabilities, but provider
                   features remain locked until the required verification is
                   approved.
                 </p>
               </details>
               <details>
-                <summary>Does Nanas provide emergency healthcare?</summary>
+                <summary>Does Nanas provide emergency care?</summary>
                 <p>
                   No. Nanas is not an emergency service and must not be used for
                   urgent or life-threatening situations.
@@ -1044,25 +1013,25 @@ export function SafetyPage() {
           copy="Know what has been checked before you choose or book care."
           mobileTitle="Know what's checked."
           mobileCopy="See every completed safety check."
-          mobilePrimaryLabel="Verified sellers"
+          mobilePrimaryLabel="Verified providers"
           mobileSecondaryLabel="How it works"
-          primary={{ href: "/find-care", label: "Browse verified sellers" }}
+          primary={{ href: "/find-care", label: "Browse verified providers" }}
           secondary={{ href: "/how-it-works", label: "See how it works" }}
         />
         <section className="mp-container mp-section">
           <SectionHead
             kicker="Layered protection"
-            title="Designed around healthcare responsibility."
+            title="Designed around care responsibility."
           />
           <div className="mp-need-grid">
             {[
               [
                 "Identity",
-                "Government ID and account details are reviewed before seller approval.",
+                "Government ID and account details are reviewed before provider approval.",
               ],
               [
                 "Credentials",
-                "Healthcare credentials are reviewed for applicable services and carry an expiry state.",
+                "Credentials are reviewed for applicable services and carry an expiry state.",
               ],
               [
                 "Background status",
@@ -1109,7 +1078,7 @@ export function SafetyPage() {
                 <h3>Pending</h3>
                 <p>
                   Documents or information are still under review and the
-                  related seller capability remains restricted.
+                  related provider capability remains restricted.
                 </p>
               </article>
               <article className="mp-step">
@@ -1177,7 +1146,7 @@ export function BecomeSellerPage() {
         <Hero
           image="/nanas/hero-seller-wide.png"
           mobileImage="/nanas/hero-seller-mobile.webp"
-          kicker="For individual healthcare sellers"
+          kicker="For individual providers"
           title="Let families find your care."
           copy="Build one verified profile and respond to suitable care requests."
           mobileTitle="Let families find you."
@@ -1186,7 +1155,7 @@ export function BecomeSellerPage() {
           mobileSecondaryLabel="Browse requests"
           primary={{
             href: "/auth?role=seller",
-            label: "Create a seller account",
+            label: "Create a provider account",
           }}
           secondary={{ href: "/care-requests", label: "Browse care requests" }}
         />
@@ -1203,7 +1172,7 @@ export function BecomeSellerPage() {
               ],
               [
                 "Matching requests",
-                "Explore healthcare requests by service, general area, date, duration, and budget.",
+                "Explore care and household requests by service, general area, date, duration, and budget.",
               ],
               [
                 "Clear quotes",
@@ -1250,7 +1219,7 @@ export function BecomeSellerPage() {
                 <h3>Submit checks</h3>
                 <p>
                   Upload identity documents and the credentials required for
-                  each healthcare service you want to offer.
+                  each care or household service you want to offer.
                 </p>
               </article>
               <article className="mp-step">
@@ -1268,9 +1237,9 @@ export function BecomeSellerPage() {
           <h2>This is not a generic gig board.</h2>
           <div>
             <p>
-              Nanas sellers are individual healthcare and care-support
+              Nanas providers are individual care and household-service
               providers. The marketplace does not support agencies, business
-              accounts, unrelated household services, contractors, or
+              accounts, unverified off-platform work, contractors, or
               shift-employment rosters.
             </p>
             <p>
@@ -1281,9 +1250,9 @@ export function BecomeSellerPage() {
               <details open>
                 <summary>What can I offer?</summary>
                 <p>
-                  Senior care, approved home nursing, post-hospital support,
-                  respite care, disability support, physiotherapy, and future
-                  healthcare services explicitly enabled by Nanas.
+                  Senior care, child care, home healthcare, housekeeping,
+                  tutoring, pet care, and future services explicitly enabled by
+                  Nanas.
                 </p>
               </details>
               <details>
@@ -1307,9 +1276,9 @@ export function BecomeSellerPage() {
         </section>
         <CTA
           title="Ready to build your Nanas profile?"
-          copy="Start your individual seller application and complete verification for the healthcare services you provide."
-          href="/auth?role=seller"
-          label="Join as a seller"
+          copy="Start your individual provider application and complete verification for the care and household services you provide."
+          href="/auth?role=seller&mode=signup"
+          label="Join as a provider"
         />
       </main>
     </MarketplacePage>

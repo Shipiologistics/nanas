@@ -1,0 +1,47 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {pathToFileURL} from 'node:url';
+const {PGlite}=await import(pathToFileURL(process.env.PGLITE_MODULE_PATH).href);
+const db=new PGlite();
+const buyer='00000000-0000-0000-0000-000000000001',seller='00000000-0000-0000-0000-000000000002',other='00000000-0000-0000-0000-000000000003';
+let checks=0;const check=async(name,fn)=>{await fn();console.log('PASS '+name);checks++;};
+const identity=async(id,role='authenticated')=>{await db.exec('reset role');await db.query("select set_config('qa.uid',$1,false)",[id]);await db.exec('set role '+role);};
+const save=async(value=true,id=seller)=>(await db.query('select public.set_provider_favorite($1,$2) result',[id,value])).rows[0].result;
+const rows=async()=>(await db.query('select * from public.favorites')).rows;
+try{
+ await db.exec(`create role anon;create role authenticated;create schema auth;create schema app_private;
+ grant usage on schema auth,app_private to authenticated;
+ create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('qa.uid',true),'')::uuid$$;
+ create function app_private.has_role(text) returns boolean language sql stable as $$select $1='buyer' and auth.uid() in('${buyer}'::uuid,'${other}'::uuid)$$;
+ create table profiles(id uuid primary key,account_status text default 'active',deleted_at timestamptz);
+ insert into profiles(id) values('${buyer}'),('${seller}'),('${other}');
+ create table seller_profiles(user_id uuid primary key references profiles(id),status text,profile_published_at timestamptz);
+ insert into seller_profiles values('${seller}','draft',null);
+ create table blocks(blocker_user_id uuid,blocked_user_id uuid);
+ create table favorites(buyer_id uuid references profiles(id),seller_id uuid references seller_profiles(user_id),created_at timestamptz default now(),primary key(buyer_id,seller_id));
+ alter table favorites enable row level security;
+ create policy favorites_owner on favorites for all to authenticated using(buyer_id=auth.uid()) with check(buyer_id=auth.uid());
+ grant select,insert,update,delete on favorites to authenticated;
+ `);
+ await identity(seller);
+ await check('reproduces provider role saving its own unpublished draft with legacy grants',async()=>{await db.exec('begin');await db.query('insert into favorites(buyer_id,seller_id) values($1,$1)',[seller]);assert.equal((await rows()).length,1);await db.exec('rollback');});
+ await db.exec('reset role');await db.exec(await readFile(new URL('../supabase/migrations/20261006030000_confirm_provider_favorites.sql',import.meta.url),'utf8'));
+ await identity('','anon');await check('anonymous cannot invoke favorites RPC or read private bookmarks',async()=>{await assert.rejects(save(),/permission denied/);await assert.rejects(rows(),/permission denied/);});
+ await identity(seller);await check('provider without buyer role cannot save or read favorites',async()=>{await assert.rejects(save(),/buyer_required/);assert.equal((await rows()).length,0);});
+ await identity(buyer);await check('draft unpublished provider cannot be saved',async()=>await assert.rejects(save(),/provider_unavailable/));
+ await db.exec(`reset role;update seller_profiles set status='approved',profile_published_at=now()`);await identity(buyer);
+ let created;await check('buyer saves one confirmed private bookmark',async()=>{const result=await save();assert.deepEqual(result,{ok:true,seller_id:seller,favorite:true});const list=await rows();assert.equal(list.length,1);created=list[0].created_at;});
+ await check('save retry is idempotent and retains original timestamp',async()=>{await save();const list=await rows();assert.equal(list.length,1);assert.deepEqual(list[0].created_at,created);});
+ await check('direct mutations cannot bypass availability and role checks',async()=>{await assert.rejects(db.query('insert into favorites(buyer_id,seller_id) values($1,$2)',[buyer,seller]),/permission denied/);await assert.rejects(db.query('delete from favorites'),/permission denied/);});
+ await check('null choice and missing provider are rejected',async()=>{await assert.rejects(save(null),/favorite_choice_required/);await assert.rejects(save(true,null),/favorite_choice_required/);await assert.rejects(save(true,other),/provider_unavailable/);});
+ await identity(other);await check('unrelated buyer cannot see or remove another buyer bookmark',async()=>{assert.equal((await rows()).length,0);assert.equal((await save(false)).favorite,false);await identity(buyer);assert.equal((await rows()).length,1);});
+ for(const direction of [0,1]){await db.exec('reset role;truncate blocks');await db.query('insert into blocks values($1,$2)',direction?[buyer,seller]:[seller,buyer]);await identity(buyer);await check('block direction '+direction+' denies a new save but allows removal',async()=>{await assert.rejects(save(),/provider_unavailable/);await save(false);assert.equal((await rows()).length,0);});}
+ await db.exec('reset role;truncate blocks');await identity(buyer);await save();
+ await db.exec("reset role;update seller_profiles set profile_published_at=null");await identity(buyer);
+ await check('unpublication preserves bookmark visibility and removal works',async()=>{assert.equal((await rows()).length,1);await save(false);assert.equal((await rows()).length,0);});
+ await check('remove retry is a successful confirmed no-op',async()=>assert.equal((await save(false)).favorite,false));
+ await db.exec("reset role;update seller_profiles set profile_published_at=now(),status='paused'");await identity(buyer);await check('paused provider cannot be saved',async()=>await assert.rejects(save(),/provider_unavailable/));
+ await db.exec("reset role;update seller_profiles set status='approved';update profiles set account_status='suspended' where id='"+seller+"'");await identity(buyer);await check('suspended provider cannot be saved',async()=>await assert.rejects(save(),/provider_unavailable/));
+ await db.exec("reset role;update profiles set account_status='active',deleted_at=now() where id='"+seller+"'");await identity(buyer);await check('deleted provider cannot be saved',async()=>await assert.rejects(save(),/provider_unavailable/));
+ console.log(`${checks} favorites SQL checks passed; isolated fixture, not full Supabase runtime.`);
+}catch(error){console.error(error);process.exitCode=1;}finally{await db.close();}

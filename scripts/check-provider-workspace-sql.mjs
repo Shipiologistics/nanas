@@ -1,0 +1,74 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {pathToFileURL} from 'node:url';
+const {PGlite}=await import(pathToFileURL(process.env.PGLITE_MODULE_PATH).href);
+const db=new PGlite(),uid=n=>`47000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+const seller=uid(1),island=uid(2),activeService=uid(3),inactiveService=uid(4),activeArea=uid(5),inactiveArea=uid(6);
+let checks=0;const check=async(name,fn)=>{await fn();checks++;console.log('PASS '+name);};
+const read=name=>readFile(new URL('../supabase/migrations/'+name+'.sql',import.meta.url),'utf8');
+const functionSlice=(s,i,name)=>{assert.ok(i>=0,name);const ends=['$$;','$function$;'].map(mark=>({at:s.indexOf(mark,i),mark})).filter(x=>x.at>=0).sort((a,b)=>a.at-b.at);assert.ok(ends.length,name);return s.slice(i,ends[0].at+ends[0].mark.length);};
+const fun=(s,name)=>functionSlice(s,s.indexOf('create or replace function '+name+'('),name);
+const newFun=(s,name)=>functionSlice(s,s.indexOf('create function '+name+'('),name);
+const identity=async()=>{await db.exec('reset role');await db.query("select set_config('qa.uid',$1,false)",[seller]);await db.exec('set role authenticated');};
+const root=sql=>db.exec('reset role;'+(sql??''));
+const service=(id,active=false)=>db.query("select public.seller_upsert_service($1,2500,4000,$2,4,array['Companionship'],array[]::text[],$3) result",[id,'Fictional provider biography '.repeat(9),active]);
+const area=(id,active=false)=>db.query('select public.seller_upsert_service_area($1,20,500,$2) result',[id,active]);
+const availability=days=>db.query("select public.seller_replace_weekly_availability($1,'09:00','17:00') result",[days]);
+const publication=published=>db.query('select public.seller_set_publication($1) result',[published]);
+try{
+ const security=await read('20260824051835_nanas_security_rpc_storage'),self=await read('20260824123500_buyer_seller_self_service_management'),limits=await read('20260824144550_seller_service_profile_limits'),publish=await read('20261005120000_provider_publication'),guard=await read('20261006130000_guard_new_marketplace_activity');
+ await db.exec(`create role anon;create role authenticated;create schema auth;create schema app_private;grant usage on schema auth,app_private to authenticated;
+ create type app_role as enum('buyer','seller','admin');create type account_status as enum('pending','active','restricted','suspended','closed');
+ create type seller_status as enum('draft','submitted','needs_information','under_review','approved','rejected','paused','suspended');create type booking_mode as enum('scheduled','on_demand');
+ create table profiles(id uuid primary key,account_status account_status not null default 'active',deleted_at timestamptz);
+ create table user_roles(user_id uuid,role app_role,revoked_at timestamptz);
+ create table islands(id uuid primary key,active boolean);
+ create table seller_profiles(user_id uuid primary key,status seller_status,display_name text,headline text,locality text,languages text[],island_id uuid,profile_published_at timestamptz,updated_at timestamptz);
+ create table services(id uuid primary key,active boolean);
+ create table seller_services(id uuid primary key default gen_random_uuid(),seller_id uuid,service_id uuid,rate_minor bigint,rate_max_minor bigint,service_bio text,years_experience integer,capabilities text[],additional_help text[],active boolean,booking_modes booking_mode[],updated_at timestamptz,unique(seller_id,service_id));
+ create table service_areas(id uuid primary key,active boolean);
+ create table seller_service_areas(id uuid primary key default gen_random_uuid(),seller_id uuid,service_area_id uuid,radius_km numeric,travel_fee_minor bigint,active boolean,updated_at timestamptz,unique(seller_id,service_area_id));
+ create table availability_rules(id uuid primary key default gen_random_uuid(),seller_id uuid,weekday smallint,local_start time,local_end time,service_id uuid,service_area_id uuid,active boolean,updated_at timestamptz);
+ create table domain_events(aggregate_type text,aggregate_id uuid,event_type text,payload_redacted jsonb);
+ create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('qa.uid',true),'')::uuid$$;
+ insert into profiles values('${seller}','active',null);insert into user_roles values('${seller}','seller',null);insert into islands values('${island}',true);
+ insert into seller_profiles values('${seller}','approved','QA Provider','Trusted fictional provider','Nassau',array['English'],'${island}',null,now());
+ insert into services values('${activeService}',true),('${inactiveService}',false);
+ insert into seller_services(seller_id,service_id,rate_minor,rate_max_minor,service_bio,years_experience,capabilities,additional_help,active,booking_modes)
+ values('${seller}','${activeService}',2500,4000,repeat('Fictional biography ',12),4,array['Companionship'],array[]::text[],true,array['scheduled']::booking_mode[]),
+ ('${seller}','${inactiveService}',2500,4000,repeat('Fictional biography ',12),4,array['Companionship'],array[]::text[],true,array['scheduled']::booking_mode[]);
+ insert into service_areas values('${activeArea}',true),('${inactiveArea}',false);
+ insert into seller_service_areas(seller_id,service_area_id,radius_km,travel_fee_minor,active) values('${seller}','${activeArea}',20,500,true),('${seller}','${inactiveArea}',20,500,true);
+ insert into availability_rules(seller_id,weekday,local_start,local_end,active) values('${seller}',1,'09:00','17:00',true);`);
+ await db.exec(fun(security,'app_private.has_role'));
+ await db.exec(newFun(guard,'app_private.require_active_marketplace_accounts'));
+ for(const name of ['seller_replace_weekly_availability','seller_upsert_service_area']){
+  const old=fun(self,'public.'+name).replace('public.'+name,'app_private.'+name);await db.exec(old);
+ }
+ await db.exec(fun(limits,'app_private.seller_upsert_service'));
+ await db.exec(fun(publish,'app_private.seller_set_publication'));
+ await db.exec(`create function public.seller_replace_weekly_availability(p_weekdays smallint[],p_local_start time,p_local_end time) returns jsonb language sql as $$select app_private.seller_replace_weekly_availability($1,$2,$3)$$;
+ create function public.seller_upsert_service_area(p_service_area_id uuid,p_radius_km numeric,p_travel_fee_minor bigint,p_active boolean) returns jsonb language sql as $$select app_private.seller_upsert_service_area($1,$2,$3,$4)$$;
+ create function public.seller_upsert_service(p_service_id uuid,p_rate_minor bigint,p_rate_max_minor bigint,p_service_bio text,p_years_experience integer,p_capabilities text[],p_additional_help text[],p_active boolean) returns jsonb language sql as $$select app_private.seller_upsert_service($1,$2,$3,$4,$5,$6,$7,$8)$$;
+ create function public.seller_set_publication(p_published boolean) returns jsonb language sql as $$select app_private.seller_set_publication($1)$$;
+ grant execute on all functions in schema public,app_private to authenticated;`);
+ await identity();
+ await check('BEFORE FIX: deactivating a removed catalog service is impossible',()=>assert.rejects(service(inactiveService,false),/service_not_available/));
+ await check('BEFORE FIX: deactivating a removed coverage area is impossible',()=>assert.rejects(area(inactiveArea,false),/area_not_available/));
+ await check('BEFORE FIX: duplicate weekdays create duplicate active rules',async()=>{await db.exec('begin');assert.equal((await availability([2,2])).rows[0].result.rules_created,2);await root();assert.equal((await db.query('select count(*)::int n from availability_rules where active')).rows[0].n,2);await db.exec('rollback');});
+ await check('BEFORE FIX: restricted provider can stage publication for automatic reappearance',async()=>{await root(`update profiles set account_status='restricted';update seller_profiles set profile_published_at=null`);await identity();await db.exec('begin');assert.ok((await publication(true)).rows[0].result.published_at);await db.exec('rollback');});
+ await root("update profiles set account_status='active';update seller_profiles set profile_published_at=null");await db.exec(await read('20261006200000_harden_provider_workspace'));await identity();
+ await check('inactive catalog service can be deactivated but not reactivated',async()=>{const r=(await service(inactiveService,false)).rows[0].result;assert.equal(r.ok,true);assert.equal(r.active_service_profiles,1);await assert.rejects(service(inactiveService,true),/service_not_available/);});
+ await check('inactive catalog coverage can be deactivated but not reactivated',async()=>{assert.equal((await area(inactiveArea,false)).rows[0].result.ok,true);await assert.rejects(area(inactiveArea,true),/area_not_available/);});
+ await check('duplicate or null weekdays fail without replacing current availability',async()=>{for(const days of [[2,2],null,[1,null]])await assert.rejects(availability(days),/invalid_weekdays/);await root();const rows=(await db.query('select weekday from availability_rules where active')).rows;assert.deepEqual(rows,[{weekday:1}]);});
+ await check('time validation fails before replacing current availability',async()=>{await identity();for(const pair of [[null,'17:00'],['09:00',null],['17:00','09:00']])await assert.rejects(db.query('select public.seller_replace_weekly_availability(array[1]::smallint[],$1,$2)',pair),/invalid_time_window/);});
+ await root("update profiles set account_status='restricted';update seller_profiles set profile_published_at=now()");await identity();
+ await check('restricted provider cannot add marketplace exposure',async()=>{await assert.rejects(publication(true),/account_new_activity_restricted/);await assert.rejects(availability([2]),/account_new_activity_restricted/);await assert.rejects(service(activeService,true),/account_new_activity_restricted/);await assert.rejects(area(activeArea,true),/account_new_activity_restricted/);});
+ await check('restricted provider can unpublish and clear availability',async()=>{assert.equal((await publication(false)).rows[0].result.published_at,null);assert.equal((await availability([])).rows[0].result.rules_created,0);});
+ await root("update profiles set account_status='active'");await identity();
+ await check('active provider can save canonical unique availability',async()=>{const r=(await availability([1,3,5])).rows[0].result;assert.equal(r.rules_created,3);await root();assert.deepEqual((await db.query('select weekday from availability_rules where active order by weekday')).rows,[{weekday:1},{weekday:3},{weekday:5}]);});
+ await identity();await check('last visible service cannot be deactivated',()=>assert.rejects(service(activeService,false),/at_least_one_active_service_required/));
+ await check('invalid coverage fails without altering the saved row',async()=>{for(const args of [[activeArea,-1,0,true],[activeArea,501,0,true],[activeArea,10,-1,true],[activeArea,10,0,null]])await assert.rejects(db.query('select public.seller_upsert_service_area($1,$2,$3,$4)',args),/invalid_coverage/);await root();assert.equal((await db.query('select radius_km::text from seller_service_areas where service_area_id=$1',[activeArea])).rows[0].radius_km,'20');});
+ const migration=await read('20261006200000_harden_provider_workspace');await check('replacement-style writes are serialized per provider',async()=>{assert.match(migration,/pg_advisory_xact_lock\(hashtextextended\('availability:'\|\|v_user::text,0\)\)/);assert.match(migration,/pg_advisory_xact_lock\(hashtextextended\('coverage:'\|\|v_user::text,0\)\)/);});
+ console.log(`${checks} provider workspace SQL checks passed; isolated fixture, not hosted/manual acceptance.`);
+}catch(error){console.error(error);process.exitCode=1;}finally{await db.close();}

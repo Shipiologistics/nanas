@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createCloudinaryUploadSignature } from "../../../../../lib/cloudinary-server";
 import { formatFromMime, IMAGE_UPLOAD_POLICIES, isImageUploadKind } from "../../../../../lib/cloudinary-policy";
-import { authenticatedApiClient, requireSellerRole } from "../../../../../lib/supabase-api-auth";
+import { authenticatedApiClient, requireActiveAccount, requireSellerRole } from "../../../../../lib/supabase-api-auth";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest) {
   try {
     const { supabase, user } = await authenticatedApiClient(request);
+    await requireActiveAccount(supabase, user.id);
     const body = (await request.json()) as { kind?: unknown; mimeType?: unknown; bytes?: unknown };
     if (!isImageUploadKind(body.kind)) return NextResponse.json({ error: "Unsupported image purpose" }, { status: 400 });
 
@@ -25,7 +26,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Upload authorization failed";
-    const status = message.includes("configuration") ? 503 : message.includes("role") ? 403 : 401;
+    const status = message.includes("configuration") ? 503 : message.includes("role") || message.includes("account") ? 403 : 401;
     return NextResponse.json({ error: message }, { status, headers: { "Cache-Control": "no-store" } });
   }
 }

@@ -63,6 +63,7 @@
 }
 
 .buyer-filter-chips button {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -473,6 +474,26 @@
   align-items: start;
 }
 
+.unavailable-favorite {
+  padding: 24px;
+  border: 1px solid #d8e5e2;
+  border-radius: 23px;
+  background: #fff;
+  overflow-wrap: anywhere;
+}
+.unavailable-favorite h2 { margin: 0 0 12px; font-size: 21px; }
+.unavailable-favorite p { line-height: 1.6; color: #526b66; }
+.unavailable-favorite button {
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 1px solid #b7ccc5;
+  border-radius: 24px;
+  background: #fff;
+  color: #174f50;
+}
+.care-result-save:disabled, .care-preview-tools button:disabled, .care-profile-save:disabled,
+.unavailable-favorite button:disabled { opacity: .55; cursor: wait; }
+
 .favorite-seller-item {
   min-width: 0;
   border: 1px solid #d8e5e2;
@@ -508,6 +529,7 @@
 .favorite-seller-item .care-result-name b {
   font-size: 32px;
   line-height: 1.1;
+  overflow-wrap: anywhere;
 }
 
 .favorite-seller-item .care-result-name small {
@@ -718,7 +740,7 @@
   }
 
   .favorite-seller-item .care-result-name {
-    padding-right: 56px;
+    padding-right: 0;
   }
 
   .favorite-seller-item .care-result-name b {
@@ -748,8 +770,9 @@
   }
 
   .favorite-seller-item .care-result-rate {
-    top: 21px;
-    right: 17px;
+    position: static;
+    grid-column: 2;
+    text-align: left;
   }
 
   .favorite-seller-item .care-result-rate b {
@@ -801,4 +824,39 @@
   .favorite-seller-item .care-result-main {
     min-height: 360px;
   }
+}
+.portal-sidebar nav { flex-shrink: 0; grid-auto-rows: minmax(43px, auto); }
+.portal-sidebar nav a { height: auto; padding-block: 10px; line-height: 1.35; }
+.portal-sidebar nav a svg { flex-shrink: 0; }
+.seller-preview-service-tabs button { flex-shrink: 0; }
+.seller-profile-builder > header { flex-wrap: wrap; }
+.seller-profile-builder > header > div { flex: 1 1 260px; }
+.seller-profile-builder > header > button { flex-shrink: 0; }
+@media (max-width: 1300px) {
+  .seller-profile-builder > header > div { flex: 0 1 auto; }
+}
+
+@media (max-width: 640px) {
+  .portal-shell .kyc-list > article,
+  .buyer-shell .kyc-list > article { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 10px; }
+  .portal-shell .kyc-list > article > .status,
+  .buyer-shell .kyc-list > article > .status { grid-column: 2; justify-self: start; }
+  .portal-shell .kyc-list > article > .kyc-actions,
+  .buyer-shell .kyc-list > article > .kyc-actions { grid-column: 2; justify-content: flex-start; }
+  .kyc-list > article > div:nth-child(2) { overflow-wrap: anywhere; }
+  .portal-shell .transaction-list > div,
+  .buyer-shell .transaction-list > div {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr);
+    gap: 10px;
+    align-items: start;
+  }
+  .portal-shell .transaction-list > div > div,
+  .buyer-shell .transaction-list > div > div { grid-column: 2; overflow-wrap: anywhere; }
+  .portal-shell .transaction-list > div > .status,
+  .buyer-shell .transaction-list > div > .status { grid-column: 2; justify-self: start; }
+  .portal-shell .transaction-list > div > strong,
+  .buyer-shell .transaction-list > div > strong { grid-column: 2; margin-left: 0; text-align: left; }
+  .portal-shell .transaction-list > .empty-state,
+  .buyer-shell .transaction-list > .empty-state { display: flex; flex-direction: column; align-items: center; }
 }

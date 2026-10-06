@@ -85,6 +85,9 @@ export type Database = {
       };
       admin_access_logs: {
         Row: {
+          access_reason: string | null;
+          message_count: number | null;
+          page_cursor: Json | null;
           admin_user_id: string;
           case_id: string | null;
           created_at: string;
@@ -95,6 +98,9 @@ export type Database = {
           resource_type: string;
         };
         Insert: {
+          access_reason?: string | null;
+          message_count?: number | null;
+          page_cursor?: Json | null;
           admin_user_id: string;
           case_id?: string | null;
           created_at?: string;
@@ -105,6 +111,9 @@ export type Database = {
           resource_type: string;
         };
         Update: {
+          access_reason?: string | null;
+          message_count?: number | null;
+          page_cursor?: Json | null;
           admin_user_id?: string;
           case_id?: string | null;
           created_at?: string;
@@ -1207,6 +1216,7 @@ export type Database = {
       };
       booking_request_publications: {
         Row: {
+          payment_intent_id: string | null;
           buyer_id: string;
           currency: string;
           duration_days_snapshot: number;
@@ -1219,6 +1229,7 @@ export type Database = {
           request_id: string;
         };
         Insert: {
+          payment_intent_id?: string | null;
           buyer_id: string;
           currency?: string;
           duration_days_snapshot: number;
@@ -1231,6 +1242,7 @@ export type Database = {
           request_id: string;
         };
         Update: {
+          payment_intent_id?: string | null;
           buyer_id?: string;
           currency?: string;
           duration_days_snapshot?: number;
@@ -1390,6 +1402,7 @@ export type Database = {
           currency: string;
           desired_end: string;
           desired_start: string;
+          emergency_contact_id: string | null;
           expires_at: string | null;
           household_member_id: string | null;
           id: string;
@@ -1414,6 +1427,7 @@ export type Database = {
           currency?: string;
           desired_end: string;
           desired_start: string;
+          emergency_contact_id?: string | null;
           expires_at?: string | null;
           household_member_id?: string | null;
           id?: string;
@@ -1438,6 +1452,7 @@ export type Database = {
           currency?: string;
           desired_end?: string;
           desired_start?: string;
+          emergency_contact_id?: string | null;
           expires_at?: string | null;
           household_member_id?: string | null;
           id?: string;
@@ -1466,6 +1481,13 @@ export type Database = {
             columns: ["buyer_id"];
             isOneToOne: false;
             referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "booking_requests_emergency_contact_id_fkey";
+            columns: ["emergency_contact_id"];
+            isOneToOne: false;
+            referencedRelation: "emergency_contacts";
             referencedColumns: ["id"];
           },
           {
@@ -1611,6 +1633,7 @@ export type Database = {
           created_at: string;
           currency: string;
           ended_at: string | null;
+          emergency_contact_id: string | null;
           household_member_id: string | null;
           id: string;
           platform_fee_minor: number;
@@ -1643,6 +1666,7 @@ export type Database = {
           created_at?: string;
           currency?: string;
           ended_at?: string | null;
+          emergency_contact_id?: string | null;
           household_member_id?: string | null;
           id?: string;
           platform_fee_minor?: number;
@@ -1675,6 +1699,7 @@ export type Database = {
           created_at?: string;
           currency?: string;
           ended_at?: string | null;
+          emergency_contact_id?: string | null;
           household_member_id?: string | null;
           id?: string;
           platform_fee_minor?: number;
@@ -1709,6 +1734,13 @@ export type Database = {
             columns: ["buyer_id"];
             isOneToOne: false;
             referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "bookings_emergency_contact_id_fkey";
+            columns: ["emergency_contact_id"];
+            isOneToOne: false;
+            referencedRelation: "emergency_contacts";
             referencedColumns: ["id"];
           },
           {
@@ -1753,6 +1785,15 @@ export type Database = {
             referencedRelation: "services";
             referencedColumns: ["id"];
           },
+        ];
+      };
+      booking_visit_updates: {
+        Row: { id: string; booking_id: string; provider_id: string; update_type: string; note: string; occurred_at: string; client_nonce: string; created_at: string };
+        Insert: { id?: string; booking_id: string; provider_id: string; update_type: string; note: string; occurred_at?: string; client_nonce: string; created_at?: string };
+        Update: { id?: string; booking_id?: string; provider_id?: string; update_type?: string; note?: string; occurred_at?: string; client_nonce?: string; created_at?: string };
+        Relationships: [
+          { foreignKeyName: "booking_visit_updates_booking_id_fkey"; columns: ["booking_id"]; isOneToOne: false; referencedRelation: "bookings"; referencedColumns: ["id"] },
+          { foreignKeyName: "booking_visit_updates_provider_id_fkey"; columns: ["provider_id"]; isOneToOne: false; referencedRelation: "profiles"; referencedColumns: ["id"] },
         ];
       };
       calendar_busy_blocks: {
@@ -6562,6 +6603,22 @@ export type Database = {
       };
     };
     Functions: {
+      admin_finance_summary: { Args: Record<PropertyKey, never>; Returns: Json };
+      conversation_access_state: { Args: Record<PropertyKey, never>; Returns: Json };
+      mark_conversation_read_through: { Args: { p_conversation_id: string; p_message_id: string }; Returns: Json };
+      simulate_conversation_purchase: { Args: { p_conversation_id: string; p_expected_amount_minor: number; p_idempotency_key: string }; Returns: Json };
+      payment_simulation_allowed: {
+        Args: Record<PropertyKey, never>;
+        Returns: boolean;
+      };
+      seller_set_publication: {
+        Args: { p_published: boolean };
+        Returns: Json;
+      };
+      verification_evidence: {
+        Args: { p_case_id: string };
+        Returns: Json;
+      };
       accept_booking_offer: {
         Args: {
           p_accept: boolean;
@@ -6579,8 +6636,20 @@ export type Database = {
         Args: { p_display_name: string };
         Returns: Json;
       };
-      admin_conversation_messages: {
-        Args: { p_conversation_id: string; p_purpose_code: string };
+      submit_seller_application: {
+        Args: { p_display_name: string; p_headline: string; p_bio: string; p_years_experience?: number };
+        Returns: Json;
+      };
+      admin_conversation_message_page: {
+        Args: { p_conversation_id: string; p_purpose_code: string; p_case_id: string; p_reason: string; p_before_created_at?: string | null; p_before_id?: string | null; p_limit?: number };
+        Returns: Json;
+      };
+      admin_permission_allowed: {
+        Args: { p_permission: string };
+        Returns: boolean;
+      };
+      admin_set_system_setting: {
+        Args: { p_key: string; p_value: Json; p_reason: string };
         Returns: Json;
       };
       admin_manage_operations_case: {
@@ -6671,15 +6740,27 @@ export type Database = {
         };
         Returns: Json;
       };
+      auto_complete_bookings: {
+        Args: { p_limit?: number; p_booking_id?: string };
+        Returns: Json;
+      };
       cancel_booking: {
         Args: {
           p_booking_id: string;
+          p_expected_fee_minor: number;
           p_idempotency_key: string;
           p_reason_code: string;
         };
         Returns: Json;
       };
       create_care_request: { Args: { p_payload: Json }; Returns: Json };
+      upsert_emergency_contact: { Args: { p_contact_id?: string | null; p_name: string; p_phone_e164: string; p_relationship: string; p_priority: number; p_consent_confirmed: boolean }; Returns: Json };
+      revoke_emergency_contact: { Args: { p_contact_id: string }; Returns: Json };
+      booking_emergency_contact: { Args: { p_booking_id: string }; Returns: Json };
+      add_booking_visit_update: { Args: { p_booking_id: string; p_update_type: string; p_note: string; p_client_nonce: string }; Returns: Json };
+      booking_visit_update_page: { Args: { p_booking_id: string; p_before_at?: string | null; p_before_id?: string | null; p_limit?: number }; Returns: Json };
+      set_provider_favorite: { Args: { p_seller_id: string; p_favorite: boolean }; Returns: Json };
+      provider_request_feed: { Args: { p_sort?: string; p_query?: string; p_service?: string; p_area?: string; p_page?: number; p_page_size?: number; p_request_id?: string }; Returns: Json };
       create_support_case: {
         Args: {
           p_booking_id?: string;

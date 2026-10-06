@@ -5,11 +5,16 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   Accessibility,
+  ArrowRight,
+  CalendarCheck,
+  ClipboardCheck,
   GraduationCap,
   HeartHandshake,
   House,
+  MessageCircle,
   PawPrint,
   Search,
+  ShieldCheck,
   Users,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -22,59 +27,65 @@ const services = [
     slug: "senior-care",
     name: "Senior care",
     description:
-      "Everyday support, companionship, mobility help, and respectful personal care.",
+      "Everyday support, companionship, mobility help, and respectful care for older adults.",
     mark: "SC",
     tone: "mint",
+    image: "/nanas/hero-safety.png",
+    meta: "Companionship, mobility, daily routines",
   },
   {
-    slug: "home-nursing",
-    name: "Home nursing",
+    slug: "child-care",
+    name: "Child care",
     description:
-      "Credentialed nursing support, vital checks, wound care, and recovery plans.",
-    mark: "RN",
+      "Trusted sitters, nannies, after-school support, and family help for children.",
+    mark: "CC",
     tone: "teal",
+    image: "/nanas/hero-home-wide.png",
+    meta: "Babysitting, nanny care, after-school help",
   },
   {
-    slug: "post-hospital-care",
-    name: "Post-hospital care",
+    slug: "home-healthcare",
+    name: "Home healthcare",
     description:
-      "Confident support at home after discharge, surgery, or a health setback.",
-    mark: "PH",
+      "Health-focused support at home, from nursing visits to recovery and wellness check-ins.",
+    mark: "HH",
     tone: "sand",
+    image: "/nanas/provider-home-care.png",
+    meta: "Nursing, recovery, wellness visits",
   },
   {
-    slug: "respite-care",
-    name: "Respite care",
+    slug: "housekeeping",
+    name: "Housekeeping",
     description:
-      "Trusted relief for family caregivers, from a few hours to extended support.",
-    mark: "RC",
+      "Reliable home help for cleaning, errands, organizing, laundry, and practical household routines.",
+    mark: "HK",
     tone: "sky",
+    image: "/nanas/hero-care-requests.png",
+    meta: "Cleaning, errands, laundry, home help",
   },
   {
-    slug: "disability-care",
-    name: "Disability care",
+    slug: "tutoring",
+    name: "Tutoring",
     description:
-      "Person-centred assistance that supports choice, access, and independence.",
-    mark: "DC",
+      "Patient academic support, test prep, homework help, and confidence-building sessions.",
+    mark: "TU",
     tone: "lilac",
+    image: "/nanas/hero-how-it-works.png",
+    meta: "Homework, test prep, learning support",
   },
   {
-    slug: "physiotherapy",
-    name: "Physiotherapy",
+    slug: "pet-care",
+    name: "Pet care",
     description:
-      "At-home mobility, rehabilitation, and movement support from qualified sellers.",
-    mark: "PT",
+      "Pet sitters, walkers, feeding visits, check-ins, and steady help while you are away.",
+    mark: "PC",
     tone: "coral",
+    image: "/nanas/hero-find-care.png",
+    meta: "Sitting, walking, feeding, check-ins",
   },
 ];
 
 const popularCategories = [
-  {
-    code: "child_care",
-    name: "Child care",
-    examples: "Babysitter · Nanny",
-    icon: Users,
-  },
   {
     code: "senior_care",
     name: "Senior care",
@@ -83,15 +94,15 @@ const popularCategories = [
   },
   {
     code: "adult_care",
-    name: "Adult care",
-    examples: "Companion · Live-in",
+    name: "Home healthcare",
+    examples: "Nursing · Recovery",
     icon: Accessibility,
   },
   {
-    code: "pet_care",
-    name: "Pet care",
-    examples: "Sitter · Walker",
-    icon: PawPrint,
+    code: "child_care",
+    name: "Child care",
+    examples: "Babysitter · Nanny",
+    icon: Users,
   },
   {
     code: "housekeeping",
@@ -105,6 +116,12 @@ const popularCategories = [
     examples: "Math · Test prep",
     icon: GraduationCap,
   },
+  {
+    code: "pet_care",
+    name: "Pet care",
+    examples: "Sitter · Walker",
+    icon: PawPrint,
+  },
 ];
 
 const careSearchSuggestions = [
@@ -117,6 +134,9 @@ const careSearchSuggestions = [
   { value: "Senior companion", category: "senior_care" },
   { value: "Hands-on senior care", category: "senior_care" },
   { value: "Live-in senior care", category: "senior_care" },
+  { value: "Home healthcare", category: "adult_care" },
+  { value: "Home nursing", category: "adult_care" },
+  { value: "Post-hospital care", category: "adult_care" },
   { value: "Adult care", category: "adult_care" },
   { value: "Adult companion", category: "adult_care" },
   { value: "Hands-on adult care", category: "adult_care" },
@@ -136,7 +156,7 @@ const careSearchSuggestions = [
   { value: "Test prep tutor", category: "tutoring" },
 ];
 
-const sellers = [
+const providers = [
   {
     initials: "AM",
     name: "Alicia M.",
@@ -146,11 +166,13 @@ const sellers = [
     reviews: 42,
     bookings: 64,
     price: 38,
-    service: "Home nursing",
+    service: "Home healthcare",
     availability: "Available tomorrow",
     bio: "Eight years of home nursing experience with a focus on older adults, recovery support, and calm family communication.",
     badges: ["Identity verified", "RN credential", "Highly rated"],
     color: "avatar-deep",
+    image: "/nanas/provider-home-care.png",
+    imageAlt: "A Nanas provider preparing care notes during an in-home visit",
   },
   {
     initials: "MD",
@@ -166,6 +188,8 @@ const sellers = [
     bio: "Patient, practical support for daily routines, mobility, appointments, and companionship at home.",
     badges: ["Identity verified", "Background checked", "Reliable responder"],
     color: "avatar-soft",
+    image: "/nanas/hero-seller.png",
+    imageAlt: "A Nanas provider smiling in a calm home care setting",
   },
   {
     initials: "SR",
@@ -176,11 +200,59 @@ const sellers = [
     reviews: 27,
     bookings: 37,
     price: 52,
-    service: "Physiotherapy",
+    service: "Home healthcare",
     availability: "Next opening Friday",
     bio: "Home-based rehabilitation and mobility support designed around each patient’s goals and comfort.",
     badges: ["Identity verified", "PT credential", "Highly rated"],
     color: "avatar-warm",
+    image: "/nanas/hero-how-it-works.png",
+    imageAlt: "A Nanas physiotherapy provider supporting a care plan at home",
+  },
+];
+
+const howSteps = [
+  {
+    Icon: ClipboardCheck,
+    title: "Tell us what you need",
+    copy: "Choose the service, area, timing, and the needs that matter for the care recipient.",
+  },
+  {
+    Icon: ShieldCheck,
+    title: "Compare verified providers",
+    copy: "Review experience, rates, availability, badges, and booking-backed reviews.",
+  },
+  {
+    Icon: CalendarCheck,
+    title: "Book with confidence",
+    copy: "Confirm the visit, pay through Nanas, and keep every update in one calm place.",
+  },
+  {
+    Icon: MessageCircle,
+    title: "Message securely",
+    copy: "Ask practical questions before care starts and keep the conversation tied to the booking.",
+  },
+];
+
+const featureHighlights = [
+  {
+    title: "Nanas Match",
+    copy: "Tell us what you need and let Nanas help find a suitable provider, especially when you do not know where to start.",
+  },
+  {
+    title: "Senior Care Advisor",
+    copy: "Not sure what type of care Mom or Dad needs? Talk to a Nanas care advisor before posting your request.",
+  },
+  {
+    title: "My Nanas favorites",
+    copy: "Save trusted providers so recurring help, future requests, and family decisions are easier next time.",
+  },
+  {
+    title: "Safer booking tools",
+    copy: "Recurring bookings, emergency contacts, visit updates, and anti-bypass reminders keep care coordinated inside Nanas.",
+  },
+  {
+    title: "Gift of care",
+    copy: "A future gift-card style option for family and friends who want to contribute to care or household help.",
   },
 ];
 
@@ -203,11 +275,14 @@ export default function NanasHome() {
       .slice(0, 6);
   }, [service]);
 
-  const rankedSellers = useMemo(() => {
-    const direct = sellers.filter((seller) => seller.service === service);
+  const rankedProviders = useMemo(() => {
+    const direct = providers.filter((provider) => provider.service === service);
     return direct.length
-      ? [...direct, ...sellers.filter((seller) => seller.service !== service)]
-      : sellers;
+      ? [
+          ...direct,
+          ...providers.filter((provider) => provider.service !== service),
+        ]
+      : providers;
   }, [service]);
 
   useEffect(() => {
@@ -260,21 +335,24 @@ export default function NanasHome() {
             <h1>
               Trusted care, <em>close to home.</em>
             </h1>
+            <p className="hero-subtitle">
+              Trusted help is just a few clicks away.
+            </p>
 
             <fieldset className="hero-mode-toggle">
               <legend>Choose search mode</legend>
               <button type="button" aria-pressed="true">
-                <span aria-hidden="true" /> Find care
+                <span aria-hidden="true" /> Find Care
               </button>
               <Link href="/post-care-request">
-                <span aria-hidden="true" /> Post request
+                <span aria-hidden="true" /> Post a request
               </Link>
             </fieldset>
 
             <div className="home-search-overlay">
               <form
             className="care-search"
-            aria-label="Find healthcare services"
+            aria-label="Find care and household services"
             onSubmit={submitSearch}
           >
             <label className="care-search-query">
@@ -289,7 +367,7 @@ export default function NanasHome() {
                 }}
                 onFocus={() => setSuggestionsOpen(true)}
                 onBlur={() => setSuggestionsOpen(false)}
-                aria-label="Healthcare service"
+                aria-label="Care or household service"
                 role="combobox"
                 aria-autocomplete="list"
                 aria-controls="care-search-suggestion-list"
@@ -307,7 +385,7 @@ export default function NanasHome() {
               />
             </label>
             <button className="care-search-submit" type="submit">
-              <span className="care-search-submit-label">Find care</span>
+              <span className="care-search-submit-label">Find Care</span>
               <Search aria-hidden="true" />
             </button>
               </form>
@@ -317,7 +395,7 @@ export default function NanasHome() {
                 aria-label="Popular care searches"
               >
                 <span>Popular:</span>
-                {popularCategories.slice(0, 4).map((item) => (
+                {popularCategories.slice(0, 5).map((item) => (
                   <Link
                     key={item.code}
                     href={`/find-care?category=${item.code}`}
@@ -360,15 +438,21 @@ export default function NanasHome() {
               <span /> Care built around people
             </div>
             <h2>
-              Healthcare support for
+              Services that feel
               <br />
-              every chapter.
+              personal from the start.
             </h2>
           </div>
-          <p>
-            From regular support to recovery at home, Nanas helps families
-            compare qualified people—not anonymous businesses or agencies.
-          </p>
+          <div className="home-heading-copy">
+            <p>
+              Find trusted people for the things that matter most: senior care,
+              child care, home healthcare, housekeeping, tutoring, pet care and
+              more across The Bahamas.
+            </p>
+            <Link href="/services">
+              Explore all services <ArrowRight aria-hidden="true" />
+            </Link>
+          </div>
         </div>
         <div className="service-grid">
           {services.map((item) => (
@@ -377,16 +461,55 @@ export default function NanasHome() {
               href={`/services/${item.slug}`}
               key={item.name}
             >
-              <span className={`service-mark ${item.tone}`}>{item.mark}</span>
+              <span className="service-card-media">
+                <Image
+                  alt=""
+                  fill
+                  sizes="(max-width: 680px) 100vw, (max-width: 1050px) 50vw, 33vw"
+                  src={item.image}
+                />
+                <span className={`service-mark ${item.tone}`}>{item.mark}</span>
+              </span>
               <span className="service-card-copy">
+                <span className="service-card-meta">{item.meta}</span>
                 <strong>{item.name}</strong>
                 <small>{item.description}</small>
               </span>
               <span className="round-arrow" aria-hidden="true">
-                ↗
+                <ArrowRight />
               </span>
             </Link>
           ))}
+        </div>
+      </section>
+
+      <section className="home-request-section">
+        <div className="request-photo">
+          <Image
+            alt="A family reviewing care options together on Nanas"
+            fill
+            sizes="(max-width: 980px) 100vw, 48vw"
+            src="/nanas/hero-care-requests-wide.png"
+          />
+        </div>
+        <div className="request-copy">
+          <div className="eyebrow">
+            <span /> Need something specific?
+          </div>
+          <h2>Post once. Let trusted providers respond.</h2>
+          <p>
+            For care that does not fit a quick search, buyers can describe the
+            timing, location, needs, and budget. Providers only see requests
+            that match the services they are approved to offer.
+          </p>
+          <div className="request-points">
+            <span>Custom schedules</span>
+            <span>Private messaging</span>
+            <span>Payment-protected booking</span>
+          </div>
+          <Link href="/post-care-request">
+            Post a care request <ArrowRight aria-hidden="true" />
+          </Link>
         </div>
       </section>
 
@@ -394,46 +517,52 @@ export default function NanasHome() {
         <div className="results-topline">
           <div>
             <div className="eyebrow">
-              <span /> Verified individual sellers
+              <span /> Sample provider profiles
             </div>
-            <h2>Care professionals families trust.</h2>
+            <h2>Trusted people for care and household help.</h2>
           </div>
           <Link href="/find-care">
-            View all sellers <span aria-hidden="true">→</span>
+            View all providers <span aria-hidden="true">→</span>
           </Link>
         </div>
         <div className="profile-grid">
-          {rankedSellers.map((seller) => (
-            <article className="profile-card" key={seller.name}>
-              <div className={`profile-photo ${seller.color}`}>
-                <span>{seller.initials}</span>
+          {rankedProviders.map((provider) => (
+            <article className="profile-card" key={provider.name}>
+              <div className={`profile-photo ${provider.color}`}>
+                <Image
+                  alt={provider.imageAlt}
+                  fill
+                  sizes="(max-width: 680px) 100vw, (max-width: 1050px) 50vw, 33vw"
+                  src={provider.image}
+                />
+                <span>{provider.initials}</span>
                 <div className="profile-availability">
-                  <i /> {seller.availability}
+                  <i /> {provider.availability}
                 </div>
               </div>
               <div className="profile-body">
                 <div className="profile-line">
                   <div>
-                    <h3>{seller.name}</h3>
-                    <p>{seller.role}</p>
+                    <h3>{provider.name}</h3>
+                    <p>{provider.role}</p>
                   </div>
-                  <div className="profile-rating">★ {seller.rating}</div>
+                  <div className="profile-rating">★ {provider.rating}</div>
                 </div>
-                <p className="profile-location">⌖ {seller.location}</p>
+                <p className="profile-location">⌖ {provider.location}</p>
                 <div className="badge-row">
-                  {seller.badges.slice(0, 2).map((badge) => (
+                  {provider.badges.slice(0, 2).map((badge) => (
                     <span key={badge}>✓ {badge}</span>
                   ))}
                 </div>
                 <div className="profile-footer">
                   <div>
-                    <strong>${seller.price}</strong>
+                    <strong>${provider.price}</strong>
                     <span> BSD / hour</span>
                   </div>
                   <Link
-                    href={`/providers/${seller.name.startsWith("Alicia") ? "alicia-m" : seller.name.startsWith("Marcus") ? "marcus-d" : "simone-r"}`}
+                    href="/find-care"
                   >
-                    View full profile
+                    Find available providers
                   </Link>
                 </div>
               </div>
@@ -443,38 +572,64 @@ export default function NanasHome() {
       </section>
 
       <section className="how-section" id="how">
-        <div className="section-heading centered-heading">
-          <div className="eyebrow">
-            <span /> Simple from the start
+        <div className="how-layout">
+          <div className="how-photo">
+            <Image
+              alt="A Nanas buyer comparing care options on a phone"
+              fill
+              sizes="(max-width: 980px) 100vw, 44vw"
+              src="/nanas/hero-how-it-works-wide.png"
+            />
           </div>
-          <h2>Find the right care in three steps.</h2>
+          <div>
+            <div className="section-heading">
+              <div className="eyebrow">
+                <span /> How Nanas works
+              </div>
+              <h2>Simple enough for every family to use.</h2>
+              <p>
+                Nanas is designed for non-tech savvy users too: choose a
+                category, tell us what is needed, compare providers, then keep
+                messages, payments, updates, and booking records in one place.
+              </p>
+            </div>
+            <div className="steps-grid">
+              {howSteps.map(({ Icon, title, copy }) => (
+                <article className="step-card" key={title}>
+                  <span>
+                    <Icon aria-hidden="true" />
+                  </span>
+                  <h3>{title}</h3>
+                  <p>{copy}</p>
+                </article>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="nanas-match-section" id="nanas-match">
+        <div className="section-heading heading-row">
+          <div>
+            <div className="eyebrow">
+              <span /> Nanas Match
+            </div>
+            <h2>
+              Not sure where to start?
+              <br />
+              Let Nanas help.
+            </h2>
+          </div>
           <p>
-            Clear choices, verified information, and a booking record you can
-            return to whenever you need it.
+            Families can search on their own, post a request, or ask Nanas to
+            help match them with a provider when the care need is unclear.
           </p>
         </div>
-        <div className="steps-grid">
-          {[
-            [
-              "01",
-              "Tell us what you need",
-              "Choose a healthcare service, your area, timing, and the needs that matter for the care recipient.",
-            ],
-            [
-              "02",
-              "Compare verified sellers",
-              "Review credentials, experience, rates, availability, badges, and reviews from completed bookings.",
-            ],
-            [
-              "03",
-              "Book with confidence",
-              "Confirm the visit, pay through Nanas, message securely, and keep every update in one place.",
-            ],
-          ].map(([number, title, copy]) => (
-            <article className="step-card" key={number}>
-              <span>{number}</span>
-              <h3>{title}</h3>
-              <p>{copy}</p>
+        <div className="feature-grid">
+          {featureHighlights.map((item) => (
+            <article className="feature-card" key={item.title}>
+              <h3>{item.title}</h3>
+              <p>{item.copy}</p>
             </article>
           ))}
         </div>
@@ -497,20 +652,20 @@ export default function NanasHome() {
           <h2>Designed to make care feel clearer.</h2>
           <p>
             Nanas gives buyers practical information before they book and keeps
-            sellers accountable to the services they are approved to provide.
+            providers accountable to the services they are approved to provide.
           </p>
           <ul>
             <li>
               <b>Clear verification labels</b>
               <span>
-                See exactly which checks and healthcare credentials are current.
+                See exactly which identity checks and relevant service qualifications are current.
               </span>
             </li>
             <li>
               <b>Two-way visit verification</b>
               <span>
-                Buyer and seller confirm a secure session code at the start of
-                care.
+                Buyer and provider confirm a secure session code at the start
+                of care.
               </span>
             </li>
             <li>
@@ -563,26 +718,26 @@ export default function NanasHome() {
           )
         : null}
 
-      <section className="seller-cta" id="sellers">
+      <section className="seller-cta" id="providers">
         <div className="seller-cta-copy">
           <div className="eyebrow">
-            <span /> For healthcare sellers
+            <span /> For care providers
           </div>
           <h2>
-            Your care makes a difference.
+            Your help makes a difference.
             <br />
             <em>Let people find it.</em>
           </h2>
           <p>
-            Create an individual profile, share your approved healthcare
-            services and availability, and manage care bookings in one calm
+            Create an individual provider profile, share your approved services
+            and availability, and manage care or household bookings in one calm
             place.
           </p>
-          <Link className="seller-cta-button" href="/become-a-seller">
-            Become a Nanas seller <span>→</span>
+          <Link className="seller-cta-button" href="/become-a-provider">
+            Become a provider <span>→</span>
           </Link>
           <small>
-            No agencies, business accounts, job bidding, or shift rosters.
+            Built for trusted individual providers across The Bahamas.
           </small>
         </div>
         <div className="seller-stat-grid">
@@ -596,7 +751,7 @@ export default function NanasHome() {
           </article>
           <article>
             <strong>100%</strong>
-            <span>healthcare-focused</span>
+            <span>care and household focused</span>
           </article>
           <article>
             <strong>BSD</strong>
@@ -609,8 +764,8 @@ export default function NanasHome() {
         <div className="quote-mark">“</div>
         <blockquote>
           Finding someone for my mother felt overwhelming. Nanas made it easier
-          to understand who was qualified, when they were free, and what the
-          visit would cost.
+          to understand who could help, when they were free, and what the visit
+          would cost.
         </blockquote>
         <div className="quote-person">
           <span>CB</span>
@@ -632,22 +787,22 @@ export default function NanasHome() {
         <div className="faq-list">
           <details open>
             <summary>
-              Who can sell healthcare services on Nanas?<span>+</span>
+              Who can become a provider on Nanas?<span>+</span>
             </summary>
             <p>
-              Only individual sellers may apply. Each healthcare service has its
-              own identity, credential, background, and eligibility requirements
-              before it can appear on a public profile.
+              Individual providers may apply for the services they can safely
+              offer. Some categories require identity, background, credential,
+              or eligibility checks before appearing on a public profile.
             </p>
           </details>
           <details>
             <summary>
-              Does Nanas employ the sellers?<span>+</span>
+              Does Nanas employ providers?<span>+</span>
             </summary>
             <p>
               Nanas is a care-booking platform. The exact legal relationship and
-              seller agreement will be shown clearly before either party commits
-              to a booking.
+              provider agreement will be shown clearly before either party
+              commits to a booking.
             </p>
           </details>
           <details>
@@ -673,24 +828,24 @@ export default function NanasHome() {
         </div>
       </section>
 
-      <footer>
+      <footer className="home-footer">
         <div className="footer-brand">
           <Link className="wordmark" href="/">
             Nanas<span>.</span>
           </Link>
-          <p>Trusted healthcare, close to home.</p>
+          <p>Trusted care and household help, close to home.</p>
         </div>
         <div>
           <b>For buyers</b>
-          <Link href="/find-care">Find care</Link>
+          <Link href="/find-care">Find a provider</Link>
           <Link href="/post-care-request">Post care request</Link>
           <Link href="/safety">Safety</Link>
         </div>
         <div>
-          <b>For sellers</b>
-          <Link href="/become-a-seller">Join as a seller</Link>
+          <b>For providers</b>
+          <Link href="/become-a-provider">Become a provider</Link>
           <Link href="/care-requests">Care requests</Link>
-          <Link href="/services">Healthcare services</Link>
+          <Link href="/services">Care and household services</Link>
         </div>
         <div>
           <b>Nanas</b>

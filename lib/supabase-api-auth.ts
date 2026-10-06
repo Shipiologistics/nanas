@@ -35,3 +35,14 @@ export async function requireSellerRole(
     .maybeSingle();
   if (error || !data) throw new Error("Seller role required");
 }
+
+export async function requireActiveAccount(
+  supabase: Awaited<ReturnType<typeof authenticatedApiClient>>["supabase"],
+  userId: string,
+) {
+  const { data, error } = await supabase.from("profiles")
+    .select("account_status,deleted_at").eq("id", userId).maybeSingle();
+  if (error || data?.account_status !== "active" || data.deleted_at) {
+    throw new Error("Active account required");
+  }
+}

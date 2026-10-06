@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const title = "Nanas | Trusted healthcare at home in The Bahamas";
+const title = "Nanas | Trusted care, close to home in The Bahamas";
 const description =
-  "Find verified nurses and healthcare sellers for trusted care at home across The Bahamas.";
+  "Find trusted people for senior care, child care, home healthcare, housekeeping, tutoring, pet care, and more across The Bahamas.";
 
 export function generateMetadata(): Metadata {
   const metadataBase = new URL(
@@ -44,7 +44,7 @@ export function generateMetadata(): Metadata {
           url: imageUrl,
           width: 1536,
           height: 864,
-          alt: "Nanas — trusted healthcare, close to home",
+          alt: "Nanas — trusted care, close to home",
         },
       ],
     },
@@ -63,7 +63,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" data-scroll-behavior="smooth">
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

@@ -1099,7 +1099,7 @@ h1 em {
   margin: -6px 40px 24px 0;
 }
 
-footer {
+.home-footer {
   background: #173f40;
   color: white;
   display: grid;
@@ -1107,24 +1107,25 @@ footer {
   grid-template-columns: 1.4fr repeat(3, 1fr);
   padding: 78px clamp(24px, 7vw, 120px) 28px;
 }
+.marketplace-preview-notice { margin: 0; padding: 12px 24px; background: #fff4d9; color: #59441d; font-size: 14px; line-height: 1.5; text-align: center; }
 .footer-brand p {
   color: #a9c1bf;
   font-size: 13px;
   margin-top: 16px;
 }
-footer > div:not(.footer-bottom) {
+.home-footer > div:not(.footer-bottom) {
   align-items: flex-start;
   display: flex;
   flex-direction: column;
   gap: 13px;
 }
-footer div > b {
+.home-footer div > b {
   color: var(--teal-50);
   font-size: 12px;
   margin-bottom: 5px;
   text-transform: uppercase;
 }
-footer div > a:not(.wordmark) {
+.home-footer div > a:not(.wordmark) {
   color: #d7e3e1;
   font-size: 13px;
 }
@@ -1382,7 +1383,7 @@ footer div > a:not(.wordmark) {
   .step-card {
     padding-right: 20px;
   }
-  footer {
+  .home-footer {
     grid-template-columns: 1.2fr repeat(3, 1fr);
   }
 }
@@ -1539,7 +1540,7 @@ footer div > a:not(.wordmark) {
   .testimonial-section blockquote {
     font-size: 29px;
   }
-  footer {
+  .home-footer {
     grid-template-columns: 1fr 1fr;
     padding: 65px 20px 25px;
   }

@@ -94,6 +94,7 @@
 .care-calendar-selection>svg{width:21px;height:21px;flex:0 0 21px}
 .care-calendar-selection>div{display:grid;gap:5px}
 .care-calendar-selection b{font-size:15px}
+.care-full-profile .care-profile-save{min-width:44px;min-height:44px}
 .care-calendar-selection span{display:flex;align-items:center;gap:6px;font-size:13px}
 .care-calendar-selection span svg{width:15px}
 .care-calendar-selection.empty{background:#f0f5f4;color:#55706c}
@@ -101,3 +102,11 @@
 
 @media(max-width:760px){.care-profile-detail-cards{grid-template-columns:1fr}.care-profile-detail-cards article{padding:16px}}
 @media(max-width:620px){.care-profile-breadcrumb{font-size:13px}.care-profile-summary-card .care-profile-identity h2{font-size:15px}.care-profile-service-tabs button{font-size:13px}.care-profile-section h2{font-size:26px}.care-profile-about h2{font-size:30px}.care-profile-bio{font-size:17px!important;line-height:1.75!important}.care-profile-review-summary{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:12px;padding:16px}.care-profile-review-summary>strong{font-size:38px;line-height:1}.care-profile-review-summary>div{min-width:0}.care-profile-review-summary b{display:block}.care-profile-review-summary p{margin-top:4px;overflow-wrap:anywhere}.care-availability-calendar{padding:14px;margin-inline:-2px}.care-availability-calendar>header h3{font-size:22px}.care-calendar-weekdays,.care-calendar-grid{gap:4px}.care-calendar-grid>span,.care-calendar-grid>button{width:36px;height:36px;min-height:36px}.care-calendar-grid>button{font-size:12px}.care-calendar-grid>button i{bottom:3px}.care-calendar-selection{padding:13px}}
+.care-profile-request-note{margin:0 20px 22px;color:#45625d;font-size:12px;line-height:1.6}
+.care-availability-calendar button:focus-visible{outline:3px solid #256c68;outline-offset:3px}
+.care-availability-calendar nav button:disabled{opacity:.4;cursor:not-allowed}
+.care-calendar-selection span{overflow-wrap:anywhere}
+.care-availability-calendar nav{flex-shrink:0}
+.care-availability-calendar nav button{width:44px;height:44px;flex:0 0 44px}
+.care-calendar-grid>button.selected:hover,.care-calendar-grid>button.selected:focus-visible{background:#174f50;color:#fff;border-color:#174f50}
+@media(max-width:620px){.care-availability-calendar{padding:10px}.care-calendar-weekdays,.care-calendar-grid{gap:0}.care-calendar-grid>span,.care-calendar-grid>button{width:100%;max-width:46px;height:44px;min-height:44px}.care-availability-calendar>header{gap:8px;flex-wrap:wrap}}

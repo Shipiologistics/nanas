@@ -3,6 +3,7 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from "react";
 import { BadgeCheck, CalendarDays, Camera, Check, Clock3, FileCheck2, Languages, MapPin, ShieldCheck, Sparkles, Star, Stethoscope, Syringe } from "lucide-react";
 import type { DemoUser } from "../../lib/demo-data";
+import { formatFromMime, IMAGE_UPLOAD_POLICIES } from "../../lib/cloudinary-policy";
 import "./seller-profile-studio.css";
 
 export type SellerProfileDraft = {
@@ -25,6 +26,7 @@ type SellerProfileStudioProps = {
   availability: { id: string; weekday: number; start: string; end: string; active: boolean }[];
   coverage: { id: string; name: string; radius: number; travelFee: number; active: boolean }[];
   verificationApproved: boolean;
+  providerApproved: boolean;
   busy?: boolean;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onEditServices: () => void;
@@ -36,14 +38,23 @@ type SellerProfileStudioProps = {
 const money = (amount: number) => new Intl.NumberFormat("en-BS", { style: "currency", currency: "BSD", maximumFractionDigits: 0 }).format(amount);
 const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-export function SellerProfileStudio({ user, profile, photoUrl, islands, services, availability, coverage, verificationApproved, busy = false, onSubmit, onEditServices, onEditAvailability, onEditCoverage, onOpenVerification }: SellerProfileStudioProps) {
+export function SellerProfileStudio({ user, profile, photoUrl, islands, services, availability, coverage, verificationApproved, providerApproved, busy = false, onSubmit, onEditServices, onEditAvailability, onEditCoverage, onOpenVerification }: SellerProfileStudioProps) {
   const [localPhotoUrl, setLocalPhotoUrl] = useState<string>();
+  const [photoError, setPhotoError] = useState("");
   useEffect(() => () => {
     if (localPhotoUrl) URL.revokeObjectURL(localPhotoUrl);
   }, [localPhotoUrl]);
   function previewPhoto(event: ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
     if (localPhotoUrl) URL.revokeObjectURL(localPhotoUrl);
+    setPhotoError("");
+    const format = file ? formatFromMime(file.type) : null;
+    if (file && (!format || !IMAGE_UPLOAD_POLICIES.profile.formats.includes(format) || file.size === 0 || file.size > IMAGE_UPLOAD_POLICIES.profile.maxBytes)) {
+      event.currentTarget.value = "";
+      setLocalPhotoUrl(undefined);
+      setPhotoError("Choose a non-empty JPG, PNG or WebP image no larger than 5 MB.");
+      return;
+    }
     setLocalPhotoUrl(file ? URL.createObjectURL(file) : undefined);
   }
   const displayedPhotoUrl = localPhotoUrl ?? photoUrl;
@@ -69,14 +80,15 @@ export function SellerProfileStudio({ user, profile, photoUrl, islands, services
 
     <div className="seller-profile-studio-grid">
       <form className="seller-profile-builder" onSubmit={onSubmit}>
-        <header><div><span>Profile builder</span><h2>Create the profile buyers compare.</h2><p>Identity details are shared across your profile. Each healthcare service keeps its own biography, experience, capabilities and rate range.</p></div><button type="submit" disabled={busy}>{busy ? "Uploading…" : "Save identity details"}</button></header>
+        <header><div><span>Profile builder</span><h2>Create the profile buyers compare.</h2><p>Identity details are shared across your profile. Each care or household service keeps its own biography, experience, capabilities and rate range.</p></div><button type="submit" disabled={busy}>{busy ? "Saving…" : "Save identity details"}</button></header>
 
         <fieldset>
           <legend><span>1</span><div><b>Public identity</b><small>Your name, profile photo and Bahamas location.</small></div></legend>
           <div className="seller-photo-field">
-            <div className={`seller-photo-preview ${displayedPhotoUrl ? "has-photo" : ""}`} style={displayedPhotoUrl ? { backgroundImage: `url(${displayedPhotoUrl})` } : undefined}>{displayedPhotoUrl ? null : initials}<i><BadgeCheck /></i></div>
+            <div className={`seller-photo-preview ${displayedPhotoUrl ? "has-photo" : ""}`} style={displayedPhotoUrl ? { backgroundImage: `url(${displayedPhotoUrl})` } : undefined}>{displayedPhotoUrl ? null : initials}{providerApproved && <i aria-label="Approved provider"><BadgeCheck /></i>}</div>
             <label><Camera /><span><b>Profile photo</b><small>JPG, PNG or WebP · maximum 5 MB · preview before upload</small></span><input name="profilePhoto" type="file" accept="image/jpeg,image/png,image/webp" onChange={previewPhoto} disabled={busy} /></label>
           </div>
+          {photoError && <p role="alert">{photoError}</p>}
           <div className="seller-profile-form-grid">
             <label>Public display name<input name="displayName" required minLength={2} maxLength={80} defaultValue={profile.displayName || user.name} /></label>
             <label>Professional headline<input name="headline" required minLength={10} maxLength={120} defaultValue={profile.headline} placeholder="Registered nurse · compassionate home care" /></label>
@@ -96,36 +108,36 @@ export function SellerProfileStudio({ user, profile, photoUrl, islands, services
 
         <section className="seller-service-profile-callout"><Sparkles /><div><b>Create 1–3 service-specific profiles</b><p>Every category needs its own substantial About section, years of experience, rate range, care qualifications and additional help. Buyers switch between these profiles without losing your shared identity and safety information.</p></div><button type="button" onClick={onEditServices}>Edit service profiles</button></section>
 
-        <footer><span><ShieldCheck />Changes remain subject to Nanas verification and moderation.</span><button type="submit" disabled={busy}>{busy ? "Uploading…" : "Save identity details"}</button></footer>
+        <footer><span><ShieldCheck />Changes remain subject to Nanas verification and moderation.</span><button type="submit" disabled={busy}>{busy ? "Saving…" : "Save identity details"}</button></footer>
       </form>
 
       <aside className="seller-profile-live-preview">
         <header><span>Buyer preview</span><small>Updates after you save</small></header>
         <div className="seller-preview-identity">
-          <div className={`seller-preview-avatar ${photoUrl ? "has-photo" : ""}`} style={photoUrl ? { backgroundImage: `url(${photoUrl})` } : undefined}>{photoUrl ? null : initials}<i><BadgeCheck /></i></div>
-          <span>Approved healthcare seller</span>
+          <div className={`seller-preview-avatar ${photoUrl ? "has-photo" : ""}`} style={photoUrl ? { backgroundImage: `url(${photoUrl})` } : undefined}>{photoUrl ? null : initials}{providerApproved && <i aria-label="Approved provider"><BadgeCheck /></i>}</div>
+          <span>{providerApproved ? "Approved care provider" : "Provider preview · not approved"}</span>
           <h2>{profile.displayName || user.name}</h2>
           <p><MapPin />{location}</p>
-          <b>{profile.headline || "Add a professional healthcare headline"}</b>
+          <b>{profile.headline || "Add a professional headline"}</b>
           <div>{verificationApproved && <i><ShieldCheck />Credentials reviewed</i>}{publicBadges.slice(0, 2).map((badge) => <i key={badge}><BadgeCheck />{badge}</i>)}</div>
         </div>
         {activeServices.length > 1 && <nav className="seller-preview-service-tabs" aria-label="Preview a service profile">{activeServices.map((service) => <button type="button" className={previewService?.id === service.id ? "active" : ""} key={service.id} onClick={() => setPreviewServiceId(service.id)}>{service.name}</button>)}</nav>}
         <div className="seller-preview-facts"><span><b>{previewService?.yearsExperience || 0}</b><small>years experience</small></span><span><b>{rate ? `${money(rate)}/hr` : "Add rate"}</b><small>starting rate</small></span><span><b>{user.sellerDetails?.rating?.toFixed(1) || "New"}</b><small>{user.sellerDetails?.reviewCount ?? 0} reviews</small></span></div>
-        <section><h3>About {profile.displayName.split(" ")[0] || "you"} · {previewService?.name ?? "service"}</h3><p>{previewService?.bio || "Add a dedicated biography for this healthcare service."}</p></section>
+        <section><h3>About {profile.displayName.split(" ")[0] || "you"} · {previewService?.name ?? "service"}</h3><p>{previewService?.bio || "Add a dedicated biography for this care or household service."}</p></section>
         {previewService?.capabilities.length ? <section><h3>Services</h3><div className="seller-preview-capabilities">{previewService.capabilities.map((item) => <span key={item}><Check />{item}</span>)}</div></section> : null}
-        <section><h3>Can help with</h3><div className="seller-preview-services">{activeServices.length ? activeServices.map((service) => <span key={service.id}><Stethoscope /><b>{service.name}</b><small>{money(service.rate)}/hour</small></span>) : <p>Add at least one approved healthcare service and rate.</p>}</div></section>
+        <section><h3>Can help with</h3><div className="seller-preview-services">{activeServices.length ? activeServices.map((service) => <span key={service.id}><Stethoscope /><b>{service.name}</b><small>{money(service.rate)}/hour</small></span>) : <p>Add at least one approved care or household service and rate.</p>}</div></section>
         <section><h3>Languages</h3><p><Languages />{profile.languages.join(", ") || "Add the languages you speak"}</p></section>
         {profile.vaccinations.length > 0 && <section><h3>Vaccinations</h3><p><Syringe />{profile.vaccinations.join(", ")}</p></section>}
       </aside>
     </div>
 
     <section className="seller-profile-linked-sections">
-      <article><Stethoscope /><div><span>Healthcare service profiles · 1–3 allowed</span><b>{serviceProfilesComplete ? `${activeServices.length} complete service profile${activeServices.length === 1 ? "" : "s"}` : "Needs attention"}</b><p>Controls each substantial biography, years, qualifications, additional help and BSD rate range.</p></div><button onClick={onEditServices}>Manage services</button></article>
+      <article><Stethoscope /><div><span>Care and household service profiles · 1–3 allowed</span><b>{serviceProfilesComplete ? `${activeServices.length} complete service profile${activeServices.length === 1 ? "" : "s"}` : "Needs attention"}</b><p>Controls each substantial biography, years, qualifications, additional help and BSD rate range.</p></div><button onClick={onEditServices}>Manage services</button></article>
       <article><CalendarDays /><div><span>Availability</span><b>{activeAvailability.length ? activeAvailability.map((item) => dayNames[item.weekday]).join(", ") : "Needs attention"}</b><p>Buyers receive guidance, while exact dates are confirmed privately.</p></div><button onClick={onEditAvailability}>Set availability</button></article>
       <article><MapPin /><div><span>Coverage</span><b>{activeCoverage.length ? activeCoverage.map((item) => item.name).join(", ") : "Needs attention"}</b><p>Determines where matching care requests and travel terms apply.</p></div><button onClick={onEditCoverage}>Manage coverage</button></article>
-      <article><FileCheck2 /><div><span>Verification</span><b>{verificationApproved ? "Approved" : "Action required"}</b><p>Identity and healthcare credentials remain private and admin-reviewed.</p></div><button onClick={onOpenVerification}>View verification</button></article>
+      <article><FileCheck2 /><div><span>Verification</span><b>{verificationApproved ? "Approved" : "Action required"}</b><p>Identity and relevant service qualifications remain private and admin-reviewed.</p></div><button onClick={onOpenVerification}>View verification</button></article>
       <article><Clock3 /><div><span>Buyer-visible trust</span><b>System managed</b><p>Response rate, completed care, ratings and badges cannot be self-edited.</p></div><span className="seller-system-badge"><Check />Protected</span></article>
-      <article><Star /><div><span>Reviews</span><b>{user.sellerDetails?.reviewCount ?? 0} verified reviews</b><p>Only eligible completed Nanas bookings can create a public review.</p></div><span className="seller-system-badge"><Check />Verified</span></article>
+      <article><Star /><div><span>Reviews</span><b>{user.sellerDetails?.reviewCount ?? 0} verified reviews</b><p>Only eligible completed Nanas bookings can create a public review.</p></div><span className="seller-system-badge"><Check />Booking-linked</span></article>
     </section>
   </div>;
 }

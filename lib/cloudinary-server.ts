@@ -3,7 +3,7 @@ import "server-only";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { v2 as cloudinary } from "cloudinary";
 import type { ImageUploadKind } from "./cloudinary-policy";
-import { IMAGE_UPLOAD_POLICIES } from "./cloudinary-policy";
+import { cloudinaryPublicIdPrefix, IMAGE_UPLOAD_POLICIES } from "./cloudinary-policy";
 
 type CloudinaryConfig = {
   cloudName: string;
@@ -69,9 +69,7 @@ export function createCloudinaryUploadSignature(kind: ImageUploadKind, userId: s
 }
 
 export function expectedCloudinaryPublicId(kind: ImageUploadKind, userId: string) {
-  const policy = IMAGE_UPLOAD_POLICIES[kind];
-  const visibility = policy.deliveryType === "upload" ? "public" : "private";
-  return `nanas/${visibility}/users/${userId}/${policy.folder}/`;
+  return cloudinaryPublicIdPrefix(kind, userId);
 }
 
 export function verifyCloudinaryResponseSignature(publicId: string, version: number, signature: string) {
@@ -128,4 +126,12 @@ export async function inspectCloudinaryImage(
 export async function pingCloudinary() {
   getCloudinaryConfig();
   return cloudinary.api.ping();
+}
+
+export function privateVerificationImageUrl(publicId: string, format: string, expiresAt: number) {
+  getCloudinaryConfig();
+  return cloudinary.utils.private_download_url(publicId, format, {
+    resource_type: "image", type: "authenticated", expires_at: expiresAt,
+    attachment: false,
+  });
 }

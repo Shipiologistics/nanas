@@ -38,3 +38,30 @@
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+
+.auth-account-choice { display: grid; gap: 16px; }
+.auth-account-choice p { line-height: 1.6; }
+.auth-account-choice a, .auth-account-choice button {
+  min-height: 44px; display: flex; align-items: center; justify-content: center;
+  border: 1px solid #416f6b; border-radius: 12px; padding: 12px 16px;
+  text-align: center; font: inherit; line-height: 1.4; overflow-wrap: anywhere;
+}
+.auth-account-choice button { background: #214e4b; color: white; cursor: pointer; }
+.auth-account-choice a { color: #214e4b; text-decoration: underline; text-underline-offset: 3px; }
+.auth-account-choice button:disabled { opacity: .65; cursor: wait; }
+.portal-access a { display: inline-flex; align-items: center; min-height: 44px; }
+
+/* Auth story sits on a dark surface at every breakpoint, including after
+   client navigation has retained marketplace/portal global styles. */
+.auth-shell .auth-story-copy h1 { color: #fff !important; }
+.auth-shell .auth-story-copy h1 em { color: #a6d2cf !important; }
+.auth-shell .auth-wordmark { font-size: 38px !important; }
+
+/* Keep auth controls usable on touch screens, including auxiliary actions. */
+.auth-shell .auth-card button { min-height: 44px; }
+.auth-shell .auth-tabs button { height: auto; }
+.auth-shell .demo-access a { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+.auth-shell .auth-card footer { font-size: 13px; line-height: 1.5; color: #536967; }
+.auth-shell .auth-message { font-size: 14px; line-height: 1.5; }
+.auth-shell .auth-message button { padding: 8px 12px; border: 1px solid #416f6b; border-radius: 8px; background: #fff; color: #214e4b; }
+.auth-shell .auth-card button:focus-visible, .auth-shell .auth-card a:focus-visible { outline: 3px solid #377e7f; outline-offset: 3px; }

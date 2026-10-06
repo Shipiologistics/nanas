@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   destroyCloudinaryImage,
-  expectedCloudinaryPublicId,
   inspectCloudinaryImage,
   publicCloudinaryUrl,
   verifyCloudinaryResponseSignature,
 } from "../../../../../lib/cloudinary-server";
-import { IMAGE_UPLOAD_POLICIES, isImageUploadKind } from "../../../../../lib/cloudinary-policy";
-import { authenticatedApiClient, requireSellerRole } from "../../../../../lib/supabase-api-auth";
+import { IMAGE_UPLOAD_POLICIES, isImageUploadKind, isOwnedCloudinaryPublicId } from "../../../../../lib/cloudinary-policy";
+import { authenticatedApiClient, requireActiveAccount, requireSellerRole } from "../../../../../lib/supabase-api-auth";
 
 export const runtime = "nodejs";
 
@@ -25,6 +24,7 @@ type VerifyBody = {
 export async function POST(request: NextRequest) {
   try {
     const { supabase, user } = await authenticatedApiClient(request);
+    await requireActiveAccount(supabase, user.id);
     const body = (await request.json()) as VerifyBody;
     if (!isImageUploadKind(body.kind)) return NextResponse.json({ error: "Unsupported image purpose" }, { status: 400 });
     const policy = IMAGE_UPLOAD_POLICIES[body.kind];
@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
     const publicId = typeof body.publicId === "string" ? body.publicId : "";
     const signature = typeof body.signature === "string" ? body.signature : "";
     const version = Number(body.version);
-    if (!publicId.startsWith(expectedCloudinaryPublicId(body.kind, user.id))) {
+    if (!isOwnedCloudinaryPublicId(body.kind, user.id, publicId)) {
       return NextResponse.json({ error: "Image ownership check failed" }, { status: 403 });
     }
     if (!Number.isSafeInteger(version) || version < 1 || !signature || !verifyCloudinaryResponseSignature(publicId, version, signature)) {
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Upload verification failed";
-    const status = message.includes("configuration") ? 503 : message.includes("role") ? 403 : 401;
+    const status = message.includes("configuration") ? 503 : message.includes("role") || message.includes("account") ? 403 : 401;
     return NextResponse.json({ error: message }, { status, headers: { "Cache-Control": "no-store" } });
   }
 }

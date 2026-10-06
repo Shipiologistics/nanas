@@ -1,7 +1,9 @@
-# Nanas healthcare marketplace
+# Nanas care and household marketplace
 
-Buyer, individual healthcare seller, and operations portals for Nanas in The
-Bahamas. The application uses native Next.js App Router and Supabase.
+Buyer, care-provider, and operations portals for Nanas in The Bahamas. The
+marketplace covers senior care, child care, home healthcare, housekeeping,
+tutoring, pet care, and related household help. The application uses the
+Next.js App Router and Supabase.
 
 ## Local development
 
@@ -26,6 +28,8 @@ Configure these for Development, Preview, and Production in Vercel:
 
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` (server-only; Vercel visibility: Secret)
+- `SUPABASE_SECRET_KEY` (server-only `nanas_workers` key; Vercel visibility: Secret)
 - `CLOUDINARY_CLOUD_NAME`
 - `CLOUDINARY_API_KEY`
 - `CLOUDINARY_API_SECRET`
@@ -36,9 +40,14 @@ Configure these for Development, Preview, and Production in Vercel:
 - `NEXT_PUBLIC_DEFAULT_CURRENCY`
 - `NEXT_PUBLIC_DEFAULT_TIMEZONE`
 
-Only the Supabase publishable key belongs in browser configuration. Do not add
-a Supabase secret or service-role key with a `NEXT_PUBLIC_` prefix. Connected
-browser requests remain scoped by Supabase Auth and Row Level Security.
+Only the Supabase publishable key belongs in browser configuration. Keep
+`SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_SECRET_KEY` server-only with exactly
+those unprefixed names and Secret visibility in Vercel. The modern secret is
+the dedicated Supabase API key named `nanas_workers`; deployed maintenance and
+notification workers accept that named key. Never add either Supabase secret
+or the service-role key with a `NEXT_PUBLIC_` prefix. Connected browser
+requests remain scoped by Supabase Auth and Row Level Security; the legacy
+service-role key is limited to the audited private-evidence route.
 
 Cloudinary image uploads are signed by authenticated Nanas API routes and sent
 directly from the browser to Cloudinary. `CLOUDINARY_API_SECRET` must remain a
@@ -71,7 +80,7 @@ server on a test port, and executes the rendered route contracts.
 4. Add the environment variables above for the required environments.
 5. Deploy, then add the final production URL to the Supabase Auth URL
    configuration and allowed redirect URLs.
-6. Apply the checked-in Supabase migrations so seller profile RPC validation
+6. Apply the checked-in Supabase migrations so provider profile RPC validation
    accepts owner-scoped Cloudinary asset references.
 
 Vercel uses `npm ci` and `npm run build`; `vercel.json` explicitly confirms the
