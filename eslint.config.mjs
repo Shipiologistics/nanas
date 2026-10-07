@@ -13,6 +13,12 @@ const eslintConfig = defineConfig([
     "dist/**",
     "out/**",
     "build/**",
+    // Expo's generated artifacts and starter maintenance script are not app
+    // source. The mobile src tree remains covered by both lint entry points.
+    "mobile/.expo/**",
+    "mobile/dist*/**",
+    "mobile/node_modules/**",
+    "mobile/scripts/reset-project.js",
     "next-env.d.ts",
   ]),
   eslint.configs.recommended,
