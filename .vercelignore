@@ -1,13 +1,20 @@
+# Keep the Vercel build context focused on the Next.js application. The Expo
+# workspace is built independently and has its own dependency graph.
+mobile/
+design/
+
+# Local QA and documentation are not required by the production runtime.
+qa-evidence/
 docs/
+examples/
 tests/
-supabase/*
-!supabase/functions/
-supabase/functions/*
-!supabase/functions/_shared/
-supabase/functions/_shared/*
-!supabase/functions/_shared/admin-message-page.mjs
-!supabase/functions/_shared/provider-onboarding.mjs
-coverage/
+
+# Generated local artifacts.
 dist/
-.wrangler/
+output/
+outputs/
+work/
+coverage/
 .vinext/
+.wrangler/
+*.tsbuildinfo
